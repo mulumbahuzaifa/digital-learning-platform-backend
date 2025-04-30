@@ -121,7 +121,26 @@ exports.login = async (req, res, next) => {
       return next(new ErrorResponse('Please verify your email first', 401));
     }
 
-    sendTokenResponse(user, 200, res);
+     // Create token
+     const token = user.getSignedJwtToken();
+
+     // Prepare user data to return (excluding sensitive info)
+     const userData = {
+       _id: user._id,
+       firstName: user.firstName,
+       lastName: user.lastName,
+       email: user.email,
+       role: user.role,
+       isVerified: user.isVerified,
+       profile: user.profile,
+       createdAt: user.createdAt
+     };
+ 
+     res.status(200).json({
+       success: true,
+       token,
+       user: userData
+     });
   } catch (err) {
     next(err);
   }
