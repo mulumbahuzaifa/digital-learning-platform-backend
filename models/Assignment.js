@@ -53,13 +53,40 @@ const mongoose = require("mongoose");
  *           items:
  *             type: object
  *             properties:
- *               url:
- *                 type: string
- *               name:
- *                 type: string
  *               type:
  *                 type: string
- *           description: Array of attached files for the assignment
+ *                 enum: [file, link]
+ *                 description: Type of attachment (file or link)
+ *               name:
+ *                 type: string
+ *                 description: Name of the attachment
+ *               description:
+ *                 type: string
+ *                 description: Optional description of the attachment
+ *               # For file type
+ *               filename:
+ *                 type: string
+ *                 description: Generated filename for uploaded file
+ *               originalname:
+ *                 type: string
+ *                 description: Original filename
+ *               mimetype:
+ *                 type: string
+ *                 description: MIME type of the file
+ *               size:
+ *                 type: number
+ *                 description: File size in bytes
+ *               path:
+ *                 type: string
+ *                 description: Path to the uploaded file
+ *               # For link type
+ *               url:
+ *                 type: string
+ *                 description: URL to the external resource
+ *               urlType:
+ *                 type: string
+ *                 enum: [document, video, website, other]
+ *                 description: Type of URL resource
  *         submissionType:
  *           type: string
  *           enum: [text, file, both]
@@ -83,6 +110,36 @@ const mongoose = require("mongoose");
  *           enum: [draft, published, closed]
  *           default: draft
  *           description: Current status of the assignment
+ *         assignmentType:
+ *           type: string
+ *           enum: [homework, classwork, test, exam, project]
+ *           required: true
+ *           description: Type of assignment
+ *         difficultyLevel:
+ *           type: string
+ *           enum: [easy, moderate, challenging]
+ *           default: moderate
+ *           description: Difficulty level of the assignment
+ *         estimatedTime:
+ *           type: number
+ *           description: Estimated time to complete in minutes
+ *         learningObjectives:
+ *           type: array
+ *           items:
+ *             type: string
+ *           description: List of learning objectives for this assignment
+ *         rubrics:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               criteria:
+ *                 type: string
+ *               marks:
+ *                 type: number
+ *               description:
+ *                 type: string
+ *           description: Grading rubrics for the assignment
  *         createdAt:
  *           type: string
  *           format: date-time
@@ -115,7 +172,7 @@ const AssignmentSchema = new mongoose.Schema({
     required: true,
   },
   weighting: {
-    type: Number, // Percentage of total grade
+    type: Number,
     min: 0,
     max: 100,
   },
@@ -137,12 +194,33 @@ const AssignmentSchema = new mongoose.Schema({
     required: true,
   },
 
-  // Attachments
+  // Attachments - can be either files or links
   attachments: [
     {
-      url: { type: String, required: true },
-      name: { type: String },
-      type: { type: String },
+      type: {
+        type: String,
+        enum: ["file", "link"],
+        required: true,
+      },
+      name: {
+        type: String,
+        required: true,
+      },
+      description: {
+        type: String,
+      },
+      // File-specific fields
+      filename: { type: String },
+      originalname: { type: String },
+      mimetype: { type: String },
+      size: { type: Number },
+      path: { type: String },
+      // Link-specific fields
+      url: { type: String },
+      urlType: {
+        type: String,
+        enum: ["document", "video", "website", "other"],
+      },
     },
   ],
 
@@ -156,6 +234,33 @@ const AssignmentSchema = new mongoose.Schema({
   allowLateSubmission: { type: Boolean, default: false },
   latePenalty: { type: Number, default: 0 }, // Percentage per day
 
+  // Assignment Type and Details
+  assignmentType: {
+    type: String,
+    enum: ["homework", "classwork", "test", "exam", "project"],
+    required: true,
+  },
+  difficultyLevel: {
+    type: String,
+    enum: ["easy", "moderate", "challenging"],
+    default: "moderate",
+  },
+  estimatedTime: {
+    type: Number, // in minutes
+  },
+  learningObjectives: [
+    {
+      type: String,
+    },
+  ],
+  rubrics: [
+    {
+      criteria: { type: String, required: true },
+      marks: { type: Number, required: true },
+      description: { type: String },
+    },
+  ],
+
   // Status
   status: {
     type: String,
@@ -166,6 +271,37 @@ const AssignmentSchema = new mongoose.Schema({
   // System
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
+});
+
+// Add indexes for better query performance
+AssignmentSchema.index({ class: 1, subject: 1, status: 1 });
+AssignmentSchema.index({ createdBy: 1, status: 1 });
+
+// Validate attachment fields based on type
+AssignmentSchema.pre("save", function (next) {
+  if (this.attachments && this.attachments.length > 0) {
+    for (const attachment of this.attachments) {
+      if (attachment.type === "file") {
+        if (
+          !attachment.filename ||
+          !attachment.originalname ||
+          !attachment.mimetype ||
+          !attachment.path
+        ) {
+          return next(
+            new Error(
+              "File attachments must include filename, originalname, mimetype, and path"
+            )
+          );
+        }
+      } else if (attachment.type === "link") {
+        if (!attachment.url) {
+          return next(new Error("Link attachments must include a URL"));
+        }
+      }
+    }
+  }
+  next();
 });
 
 module.exports = mongoose.model("Assignment", AssignmentSchema);

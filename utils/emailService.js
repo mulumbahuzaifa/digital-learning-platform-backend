@@ -17,8 +17,11 @@ const sendEmail = async (options) => {
     from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM}>`,
     to: options.email,
     subject: options.subject,
-    text: options.message,
-    // html: options.html (for HTML formatted emails)
+    text: options.text,
+    html: options.html,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8'
+    }
   };
 
   // 3) Actually send the email

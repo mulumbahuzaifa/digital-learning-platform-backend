@@ -213,7 +213,7 @@ exports.deleteEvent = async (req, res, next) => {
       );
     }
 
-    await event.remove();
+    await event.deleteOne();
 
     res.status(200).json({
       success: true,

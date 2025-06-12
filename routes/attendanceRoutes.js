@@ -231,30 +231,3 @@ router.put("/:id/verify", role("admin"), verifyAttendance);
 
 module.exports = router;
 
-/**
- * @swagger
- * components:
- *   schemas:
- *     Attendance:
- *       type: object
- *       required:
- *         - student
- *         - class
- *         - date
- *         - status
- *       properties:
- *         student:
- *           type: string
- *           format: objectId
- *         class:
- *           type: string
- *           format: objectId
- *         date:
- *           type: string
- *           format: date
- *         status:
- *           type: string
- *           enum: [present, absent, late]
- *         reason:
- *           type: string
- */

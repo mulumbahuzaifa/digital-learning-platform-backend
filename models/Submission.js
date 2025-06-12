@@ -9,8 +9,7 @@ const mongoose = require("mongoose");
  *       required:
  *         - assignment
  *         - student
- *         - class
- *         - subject
+ *         - enrollment
  *       properties:
  *         assignment:
  *           type: string
@@ -20,37 +19,38 @@ const mongoose = require("mongoose");
  *           type: string
  *           format: objectId
  *           description: Reference to the student submitting
- *         class:
+ *         enrollment:
  *           type: string
  *           format: objectId
- *           description: Reference to the class
- *         subject:
- *           type: string
- *           format: objectId
- *           description: Reference to the subject
+ *           description: Reference to the student's academic enrollment
  *         textSubmission:
  *           type: string
  *           description: Text content of the submission (if applicable)
- *         attachments:
+ *         files:
  *           type: array
  *           items:
  *             type: object
  *             required:
- *               - url
+ *               - filename
+ *               - originalname
+ *               - mimetype
+ *               - path
  *             properties:
- *               url:
+ *               filename:
  *                 type: string
- *                 description: URL to the uploaded file
- *               name:
+ *                 description: Generated filename
+ *               originalname:
  *                 type: string
  *                 description: Original filename
- *               type:
+ *               mimetype:
  *                 type: string
  *                 description: MIME type of the file
  *               size:
  *                 type: number
  *                 description: File size in bytes
- *           description: Array of attached files
+ *               path:
+ *                 type: string
+ *                 description: Path to the uploaded file
  *         submitDate:
  *           type: string
  *           format: date-time
@@ -94,24 +94,20 @@ const mongoose = require("mongoose");
  *               comment:
  *                 type: string
  *                 description: Comments for this criteria
- *           description: Detailed grading rubrics
  *         status:
  *           type: string
  *           enum: [submitted, graded, resubmitted, overdue]
  *           default: submitted
- *           description: Current status of the submission
  *         createdAt:
  *           type: string
  *           format: date-time
- *           description: Date when the submission was created
  *         updatedAt:
  *           type: string
  *           format: date-time
- *           description: Date when the submission was last updated
  */
 
 const SubmissionSchema = new mongoose.Schema({
-  // Relationships
+  // Core relationships
   assignment: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Assignment",
@@ -122,25 +118,21 @@ const SubmissionSchema = new mongoose.Schema({
     ref: "User",
     required: true,
   },
-  class: {
+  enrollment: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "Class",
-    required: true,
-  },
-  subject: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Subject",
+    ref: "AcademicEnrollment",
     required: true,
   },
 
   // Submission content
   textSubmission: { type: String },
-  attachments: [
+  files: [
     {
-      url: { type: String, required: true },
-      name: { type: String },
-      type: { type: String },
+      filename: { type: String },
+      originalname: { type: String },
+      mimetype: { type: String },
       size: { type: Number },
+      path: { type: String },
     },
   ],
   submitDate: {
@@ -164,10 +156,33 @@ const SubmissionSchema = new mongoose.Schema({
     },
   ],
 
+  // Submission Details
+  submissionMethod: {
+    type: String,
+    enum: ["online", "offline"],
+    default: "online",
+  },
+  submissionNotes: { type: String },
+  resubmissionCount: { type: Number, default: 0 },
+  lastResubmissionDate: { type: Date },
+  plagiarismScore: { type: Number, min: 0, max: 100 },
+  plagiarismReport: { type: String },
+  studentComments: { type: String },
+  teacherComments: { type: String },
+  parentFeedback: { type: String },
+  parentFeedbackDate: { type: Date },
+
   // Status
   status: {
     type: String,
-    enum: ["submitted", "graded", "resubmitted", "overdue"],
+    enum: [
+      "submitted",
+      "graded",
+      "resubmitted",
+      "overdue",
+      "returned",
+      "approved",
+    ],
     default: "submitted",
   },
 
@@ -175,5 +190,56 @@ const SubmissionSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
+
+// Add indexes for better query performance
+SubmissionSchema.index({ assignment: 1, student: 1 });
+SubmissionSchema.index({ student: 1, status: 1 });
+SubmissionSchema.index({ enrollment: 1 });
+
+// Virtual populate for class and subject
+SubmissionSchema.virtual("class", {
+  ref: "Assignment",
+  localField: "assignment",
+  foreignField: "_id",
+  justOne: true,
+  select: "class",
+});
+
+SubmissionSchema.virtual("subject", {
+  ref: "Assignment",
+  localField: "assignment",
+  foreignField: "_id",
+  justOne: true,
+  select: "subject",
+});
+
+// Pre-save middleware to set submission type and check if late
+SubmissionSchema.pre("save", async function (next) {
+  if (this.isNew) {
+    const assignment = await this.model("Assignment").findById(this.assignment);
+    if (assignment) {
+      // Check if submission is late
+      if (new Date() > assignment.dueDate) {
+        this.isLate = true;
+        const diffTime = Math.abs(new Date() - assignment.dueDate);
+        this.lateDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      }
+    }
+  }
+  next();
+});
+
+// Method to get class and subject info
+SubmissionSchema.methods.getClassAndSubject = async function () {
+  const assignment = await this.model("Assignment")
+    .findById(this.assignment)
+    .populate("class", "name level stream")
+    .populate("subject", "name code");
+
+  return {
+    class: assignment.class,
+    subject: assignment.subject,
+  };
+};
 
 module.exports = mongoose.model("Submission", SubmissionSchema);

@@ -7,9 +7,86 @@ const {
   updateSubmission,
   gradeSubmission,
   downloadSubmissionFile,
+  getSubmissionsByAssignment,
+  requestResubmission,
+  addParentFeedback,
+  // checkPlagiarism,
+  getSubmissionStats,
+  getStudentSubmissions,
+  getTeacherSubmissions,
 } = require("../controllers/submissionController");
-const { protect } = require("../middleware/auth");
-const fileUpload = require("../utils/fileUpload");
+const { protect, authorize, role } = require("../middleware/auth");
+const { upload } = require("../utils/fileUpload");
+
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     Submission:
+ *       type: object
+ *       required:
+ *         - assignment
+ *         - student
+ *         - status
+ *       properties:
+ *         _id:
+ *           type: string
+ *           description: Auto-generated MongoDB ID
+ *         assignment:
+ *           type: string
+ *           description: Reference to Assignment model
+ *         student:
+ *           type: string
+ *           description: Reference to User model (student)
+ *         content:
+ *           type: string
+ *           description: Text content of the submission
+ *         files:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               filename:
+ *                 type: string
+ *               originalname:
+ *                 type: string
+ *               mimetype:
+ *                 type: string
+ *               size:
+ *                 type: number
+ *               path:
+ *                 type: string
+ *         status:
+ *           type: string
+ *           enum: [submitted, late, graded, resubmission_requested]
+ *         grade:
+ *           type: string
+ *           description: Grade awarded (A-F)
+ *         feedback:
+ *           type: string
+ *         gradedBy:
+ *           type: string
+ *           description: Reference to User model (teacher)
+ *         gradedAt:
+ *           type: string
+ *           format: date-time
+ *         parentFeedback:
+ *           type: object
+ *           properties:
+ *             feedback:
+ *               type: string
+ *             parent:
+ *               type: string
+ *             date:
+ *               type: string
+ *               format: date-time
+ *         createdAt:
+ *           type: string
+ *           format: date-time
+ *         updatedAt:
+ *           type: string
+ *           format: date-time
+ */
 
 /**
  * @swagger
@@ -22,12 +99,7 @@ const fileUpload = require("../utils/fileUpload");
  * @swagger
  * /api/submissions:
  *   get:
- *     summary: Get submissions
- *     description: |
- *       Retrieve submissions with filtering options. Access rules:
- *       - Students can only see their own submissions
- *       - Teachers can see submissions for their assignments
- *       - Admins can see all submissions
+ *     summary: Get all submissions with filtering
  *     tags: [Submissions]
  *     security:
  *       - bearerAuth: []
@@ -36,25 +108,74 @@ const fileUpload = require("../utils/fileUpload");
  *         name: assignment
  *         schema:
  *           type: string
- *           format: objectId
  *         description: Filter by assignment ID
  *       - in: query
  *         name: student
  *         schema:
  *           type: string
- *           format: objectId
  *         description: Filter by student ID
  *       - in: query
  *         name: class
  *         schema:
  *           type: string
- *           format: objectId
  *         description: Filter by class ID
  *       - in: query
  *         name: subject
  *         schema:
  *           type: string
- *           format: objectId
+ *         description: Filter by subject ID
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *         description: Filter by submission status
+ *       - in: query
+ *         name: term
+ *         schema:
+ *           type: string
+ *         description: Filter by term
+ *       - in: query
+ *         name: academicYear
+ *         schema:
+ *           type: string
+ *         description: Filter by academic year
+ *     responses:
+ *       200:
+ *         description: List of submissions
+ *       401:
+ *         description: Not authorized
+ */
+
+/**
+ * @swagger
+ * /api/submissions/student:
+ *   get:
+ *     summary: Get student's submissions
+ *     description: Retrieve all submissions made by the logged-in student
+ *     tags: [Submissions]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [submitted, graded, returned]
+ *         description: Filter by submission status
+ *       - in: query
+ *         name: assignment
+ *         schema:
+ *           type: string
+ *         description: Filter by assignment ID
+ *       - in: query
+ *         name: class
+ *         schema:
+ *           type: string
+ *         description: Filter by class ID
+ *       - in: query
+ *         name: subject
+ *         schema:
+ *           type: string
  *         description: Filter by subject ID
  *     responses:
  *       200:
@@ -66,101 +187,47 @@ const fileUpload = require("../utils/fileUpload");
  *               properties:
  *                 success:
  *                   type: boolean
- *                   example: true
  *                 count:
  *                   type: number
- *                   description: Number of submissions returned
- *                   example: 5
  *                 data:
  *                   type: array
  *                   items:
  *                     $ref: '#/components/schemas/Submission'
- *       401:
- *         description: Not authenticated
- *       500:
- *         description: Server error
- *   
- *   post:
- *     summary: Create submission
- *     description: |
- *       Create a new submission. Rules:
- *       - Only students can submit
- *       - Assignment must exist and be published
- *       - Student must be enrolled in the class
- *       - Submission must be before due date (unless late submissions allowed)
- *       - File uploads are handled through multipart/form-data
- *     tags: [Submissions]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         multipart/form-data:
- *           schema:
- *             type: object
- *             required:
- *               - assignment
- *             properties:
- *               assignment:
- *                 type: string
- *                 format: objectId
- *                 description: Assignment ID
- *               textSubmission:
- *                 type: string
- *                 description: Text content (if applicable)
- *               files:
- *                 type: array
- *                 items:
- *                   type: string
- *                   format: binary
- *                 description: Files to upload
- *     responses:
- *       201:
- *         description: Submission created successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 data:
- *                   $ref: '#/components/schemas/Submission'
- *       400:
- *         description: Invalid input or submission not allowed
- *       401:
- *         description: Not authenticated
  *       403:
- *         description: Not authorized to submit
- *       404:
- *         description: Assignment not found
- *       500:
- *         description: Server error
+ *         description: Not authorized - only students can access this endpoint
  */
 
 /**
  * @swagger
- * /api/submissions/{id}:
+ * /api/submissions/teacher:
  *   get:
- *     summary: Get single submission
- *     description: |
- *       Get detailed information about specific submission.
- *       Access rules:
- *       - Student can access their own submission
- *       - Teacher can access if they created the assignment
- *       - Admin can access any submission
+ *     summary: Get teacher's submissions
+ *     description: Retrieve all submissions for assignments created by the logged-in teacher
  *     tags: [Submissions]
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: path
- *         name: id
- *         required: true
+ *       - in: query
+ *         name: status
  *         schema:
  *           type: string
- *           format: objectId
- *         description: Submission ID
+ *           enum: [submitted, graded, returned]
+ *         description: Filter by submission status
+ *       - in: query
+ *         name: assignment
+ *         schema:
+ *           type: string
+ *         description: Filter by assignment ID
+ *       - in: query
+ *         name: class
+ *         schema:
+ *           type: string
+ *         description: Filter by class ID
+ *       - in: query
+ *         name: subject
+ *         schema:
+ *           type: string
+ *         description: Filter by subject ID
  *     responses:
  *       200:
  *         description: Success
@@ -171,25 +238,109 @@ const fileUpload = require("../utils/fileUpload");
  *               properties:
  *                 success:
  *                   type: boolean
- *                   example: true
+ *                 count:
+ *                   type: number
  *                 data:
- *                   $ref: '#/components/schemas/Submission'
- *       401:
- *         description: Not authenticated
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Submission'
  *       403:
- *         description: Not authorized to access this submission
- *       404:
- *         description: Submission not found
- *       500:
- *         description: Server error
- *   
- *   put:
- *     summary: Update submission
- *     description: |
- *       Update submission. Rules:
- *       - Only student can update their own submission
- *       - Cannot update if already graded
- *       - Must be before due date (unless late submissions allowed)
+ *         description: Not authorized - only teachers can access this endpoint
+ */
+
+// Protect all routes
+router.use(protect);
+
+// Base routes
+router
+  .route("/")
+  .get(role("admin", "teacher"), getSubmissions)
+  .post(role("student"), upload.array("files", 5), createSubmission);
+
+router.get("/student", role("student"), getStudentSubmissions);
+router.get("/teacher", role("teacher"), getTeacherSubmissions);
+
+/**
+ * @swagger
+ * /api/submissions/stats:
+ *   get:
+ *     summary: Get submission statistics
+ *     tags: [Submissions]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Submission statistics
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       _id:
+ *                         type: string
+ *                       count:
+ *                         type: integer
+ *       401:
+ *         description: Not authorized
+ *       403:
+ *         description: Forbidden - Insufficient permissions
+ */
+router.get("/stats", authorize("teacher", "admin"), getSubmissionStats);
+
+/**
+ * @swagger
+ * /api/submissions/assignment/{assignmentId}:
+ *   get:
+ *     summary: Get all submissions for a specific assignment
+ *     tags: [Submissions]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: assignmentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Assignment ID
+ *     responses:
+ *       200:
+ *         description: List of submissions for the assignment
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Submission'
+ *       401:
+ *         description: Not authorized
+ *       403:
+ *         description: Forbidden - Insufficient permissions
+ */
+router.get(
+  "/assignment/:assignmentId",
+  authorize("teacher", "admin"),
+  getSubmissionsByAssignment
+);
+
+/**
+ * @swagger
+ * /api/submissions/{id}:
+ *   get:
+ *     summary: Get a single submission
  *     tags: [Submissions]
  *     security:
  *       - bearerAuth: []
@@ -199,14 +350,51 @@ const fileUpload = require("../utils/fileUpload");
  *         required: true
  *         schema:
  *           type: string
- *           format: objectId
+ *         description: Submission ID
+ *     responses:
+ *       200:
+ *         description: Submission details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   $ref: '#/components/schemas/Submission'
+ *       401:
+ *         description: Not authorized
+ *       403:
+ *         description: Forbidden - Insufficient permissions
+ *       404:
+ *         description: Submission not found
+ *   put:
+ *     summary: Update a submission
+ *     tags: [Submissions]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
  *         description: Submission ID
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
- *             $ref: '#/components/schemas/Submission'
+ *             type: object
+ *             properties:
+ *               content:
+ *                 type: string
+ *               files:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
  *     responses:
  *       200:
  *         description: Submission updated successfully
@@ -217,30 +405,25 @@ const fileUpload = require("../utils/fileUpload");
  *               properties:
  *                 success:
  *                   type: boolean
- *                   example: true
  *                 data:
  *                   $ref: '#/components/schemas/Submission'
- *       400:
- *         description: Invalid input or update not allowed
  *       401:
- *         description: Not authenticated
+ *         description: Not authorized
  *       403:
- *         description: Not authorized to update this submission
+ *         description: Forbidden - Insufficient permissions
  *       404:
  *         description: Submission not found
- *       500:
- *         description: Server error
  */
+router
+  .route("/:id")
+  .get(getSubmission)
+  .put(role("student"), upload.array("files", 5), updateSubmission);
 
 /**
  * @swagger
  * /api/submissions/{id}/grade:
  *   put:
- *     summary: Grade submission
- *     description: |
- *       Grade a submission. Rules:
- *       - Only teacher who created the assignment can grade
- *       - Marks cannot exceed total marks
+ *     summary: Grade a submission
  *     tags: [Submissions]
  *     security:
  *       - bearerAuth: []
@@ -250,7 +433,6 @@ const fileUpload = require("../utils/fileUpload");
  *         required: true
  *         schema:
  *           type: string
- *           format: objectId
  *         description: Submission ID
  *     requestBody:
  *       required: true
@@ -259,26 +441,12 @@ const fileUpload = require("../utils/fileUpload");
  *           schema:
  *             type: object
  *             required:
- *               - marksAwarded
+ *               - grade
  *             properties:
- *               marksAwarded:
- *                 type: number
- *                 description: Marks awarded
+ *               grade:
+ *                 type: string
  *               feedback:
  *                 type: string
- *                 description: Feedback comments
- *               rubrics:
- *                 type: array
- *                 items:
- *                   type: object
- *                   properties:
- *                     criteria:
- *                       type: string
- *                     marks:
- *                       type: number
- *                     comment:
- *                       type: string
- *                 description: Detailed grading rubrics
  *     responses:
  *       200:
  *         description: Submission graded successfully
@@ -289,29 +457,22 @@ const fileUpload = require("../utils/fileUpload");
  *               properties:
  *                 success:
  *                   type: boolean
- *                   example: true
  *                 data:
  *                   $ref: '#/components/schemas/Submission'
- *       400:
- *         description: Invalid marks or input
  *       401:
- *         description: Not authenticated
+ *         description: Not authorized
  *       403:
- *         description: Not authorized to grade this submission
+ *         description: Forbidden - Insufficient permissions
  *       404:
  *         description: Submission not found
- *       500:
- *         description: Server error
  */
+router.route("/:id/grade").put(authorize("teacher", "admin"), gradeSubmission);
 
 /**
  * @swagger
- * /api/submissions/{id}/download/{fileId}:
- *   get:
- *     summary: Download submission file
- *     description: |
- *       Download a file from a submission.
- *       Access rules same as viewing submission.
+ * /api/submissions/{id}/request-resubmission:
+ *   put:
+ *     summary: Request resubmission
  *     tags: [Submissions]
  *     security:
  *       - bearerAuth: []
@@ -321,14 +482,114 @@ const fileUpload = require("../utils/fileUpload");
  *         required: true
  *         schema:
  *           type: string
- *           format: objectId
+ *         description: Submission ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - reason
+ *               - deadline
+ *             properties:
+ *               reason:
+ *                 type: string
+ *               deadline:
+ *                 type: string
+ *                 format: date-time
+ *     responses:
+ *       200:
+ *         description: Resubmission requested successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   $ref: '#/components/schemas/Submission'
+ *       401:
+ *         description: Not authorized
+ *       403:
+ *         description: Forbidden - Insufficient permissions
+ *       404:
+ *         description: Submission not found
+ */
+router
+  .route("/:id/request-resubmission")
+  .put(authorize("teacher", "admin"), requestResubmission);
+
+/**
+ * @swagger
+ * /api/submissions/{id}/parent-feedback:
+ *   put:
+ *     summary: Add parent feedback
+ *     tags: [Submissions]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Submission ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - feedback
+ *             properties:
+ *               feedback:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Parent feedback added successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   $ref: '#/components/schemas/Submission'
+ *       401:
+ *         description: Not authorized
+ *       403:
+ *         description: Forbidden - Insufficient permissions
+ *       404:
+ *         description: Submission not found
+ */
+router
+  .route("/:id/parent-feedback")
+  .put(authorize("parent"), addParentFeedback);
+
+/**
+ * @swagger
+ * /api/submissions/{id}/download/{fileId}:
+ *   get:
+ *     summary: Download a submission file
+ *     tags: [Submissions]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
  *         description: Submission ID
  *       - in: path
  *         name: fileId
  *         required: true
  *         schema:
  *           type: string
- *           format: objectId
  *         description: File ID
  *     responses:
  *       200:
@@ -339,26 +600,12 @@ const fileUpload = require("../utils/fileUpload");
  *               type: string
  *               format: binary
  *       401:
- *         description: Not authenticated
+ *         description: Not authorized
  *       403:
- *         description: Not authorized to access this file
+ *         description: Forbidden - Insufficient permissions
  *       404:
  *         description: File not found
- *       500:
- *         description: Server error
  */
-
-router.use(protect);
-
-router
-  .route("/")
-  .get(getSubmissions)
-  .post(fileUpload.upload.array("files"), createSubmission);
-
-router.route("/:id").get(getSubmission).put(updateSubmission);
-
-router.put("/:id/grade", gradeSubmission);
 router.get("/:id/download/:fileId", downloadSubmissionFile);
-
 
 module.exports = router;

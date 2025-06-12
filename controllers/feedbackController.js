@@ -217,7 +217,7 @@ exports.deleteFeedback = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Not authorized to delete this feedback', 403));
   }
 
-  await feedback.remove();
+  await feedback.deleteOne();
 
   res.status(200).json({
     success: true,

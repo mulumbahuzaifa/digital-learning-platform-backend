@@ -6,7 +6,8 @@ const {
   createContent,
   updateContent,
   deleteContent,
-  downloadContent
+  downloadContent,
+  getMyContent
 } = require('../controllers/contentController');
 const { protect, authorize } = require('../middleware/auth');
 const fileUpload = require('../utils/fileUpload');
@@ -278,6 +279,58 @@ router.use(protect);
 router.route('/')
   .get(getContent)
   .post(authorize('teacher', 'admin'), fileUpload.upload.single('file'), createContent);
+
+  /**
+ * @swagger
+ * /api/content/my-content:
+ *   get:
+ *     summary: Get content relevant to the current user
+ *     description: |
+ *       Returns content either uploaded by the user or accessible to them based on:
+ *       - For teachers: Content they uploaded or content for subjects they teach
+ *       - For students: Content for classes they're enrolled in
+ *       - For admins: All content
+ *     tags: [Content]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: type
+ *         schema:
+ *           type: string
+ *           enum: [note, assignment, slide, video, audio, document, link, quiz]
+ *       - in: query
+ *         name: isPublic
+ *         schema:
+ *           type: boolean
+ *       - in: query
+ *         name: accessLevel
+ *         schema:
+ *           type: string
+ *           enum: [class, school, public]
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Success
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Content'
+ */
+
+router.get('/my-content', getMyContent);
 
 router.route('/:id')
   .get(getSingleContent)

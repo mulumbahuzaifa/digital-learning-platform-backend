@@ -9,8 +9,8 @@ const mongoose = require("mongoose");
  *       required:
  *         - name
  *         - code
- *         - year
- *         - academicTerm
+ *         - level
+ *         - stream
  *       properties:
  *         name:
  *           type: string
@@ -18,12 +18,12 @@ const mongoose = require("mongoose");
  *         code:
  *           type: string
  *           description: Unique class code (auto-generated)
- *         year:
+ *         level:
  *           type: string
- *           description: Academic year
- *         academicTerm:
+ *           description: Class level (e.g., "S1", "S2", "S3")
+ *         stream:
  *           type: string
- *           enum: [Term 1, Term 2, Term 3]
+ *           description: Class stream (e.g., "A", "B", "C")
  *         description:
  *           type: string
  *           maxLength: 500
@@ -63,23 +63,6 @@ const mongoose = require("mongoose");
  *                     type: string
  *                   venue:
  *                     type: string
- *         students:
- *           type: array
- *           items:
- *             type: object
- *             properties:
- *               student:
- *                 type: string
- *                 format: objectId
- *               status:
- *                 type: string
- *                 enum: [pending, approved, rejected]
- *               enrollmentType:
- *                 type: string
- *                 enum: [new, transfer]
- *               enrolledBy:
- *                 type: string
- *                 format: objectId
  *         classTeacher:
  *           type: string
  *           format: objectId
@@ -118,14 +101,15 @@ const ClassSchema = new mongoose.Schema({
     required: true,
     uppercase: true,
   },
-  year: {
+  level: {
     type: String,
     required: true,
+    trim: true,
   },
-  academicTerm: {
+  stream: {
     type: String,
-    enum: ["Term 1", "Term 2", "Term 3"],
     required: true,
+    trim: true,
   },
   description: {
     type: String,
@@ -169,7 +153,7 @@ const ClassSchema = new mongoose.Schema({
             "Thursday",
             "Friday",
             "Saturday",
-            "Sunday"
+            "Sunday",
           ],
         },
         startTime: { type: String }, // "08:00"
@@ -178,34 +162,6 @@ const ClassSchema = new mongoose.Schema({
       },
     },
   ],
-  // Students in this class
-  // Students in this class (regardless of subjects)
-  students: [
-    {
-      student: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-        required: true,
-      },
-      status: {
-        type: String,
-        enum: ["pending", "approved", "rejected"],
-        default: "pending",
-      },
-      approvedAt: Date,
-      enrollmentDate: {
-        type: Date,
-        default: Date.now,
-      },
-      enrollmentType: {
-        type: String,
-        enum: ["new", "transfer"],
-        default: "new",
-      },
-      enrolledBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    },
-  ],
-
   // Class management
   classTeacher: {
     type: mongoose.Schema.Types.ObjectId,
@@ -215,9 +171,10 @@ const ClassSchema = new mongoose.Schema({
     {
       position: { type: String },
       student: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      assignedAt: { type: Date, default: Date.now },
+      assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     },
   ],
-
   // System
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now },
@@ -228,10 +185,9 @@ const ClassSchema = new mongoose.Schema({
 ClassSchema.pre("save", function (next) {
   if (!this.isModified("code") && this.code) return next();
 
-  // Format: YEAR-TERM-RANDOM (e.g., S1-T1-X5B9)
-  const termCode = this.academicTerm.replace("Term ", "T");
+  // Format: LEVEL-STREAM-RANDOM (e.g., S1-A-X5B9)
   const randomChars = Math.random().toString(36).substring(2, 6).toUpperCase();
-  this.code = `${this.year}-${termCode}-${randomChars}`;
+  this.code = `${this.level}-${this.stream}-${randomChars}`;
 
   next();
 });

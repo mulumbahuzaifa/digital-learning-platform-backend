@@ -86,6 +86,19 @@ const SubjectSchema = new mongoose.Schema({
   syllabus: {
     type: String // URL to syllabus document
   },
+  // Add more fields as needed
+  classes:  [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Class'
+    }
+  ],
+  teachers: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }
+  ],
   isActive: {
     type: Boolean,
     default: true

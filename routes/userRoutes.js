@@ -7,6 +7,8 @@ const {
   updateUser,
   deleteUser,
   updateProfile,
+  getStudents,
+  getTeachers,
 } = require("../controllers/userController");
 const { protect, authorize } = require("../middleware/auth");
 
@@ -18,6 +20,84 @@ const { protect, authorize } = require("../middleware/auth");
  */
 
 router.use(protect);
+
+/**
+ * @swagger
+ * /api/users/students:
+ *   get:
+ *     summary: Get all students
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: isActive
+ *         schema:
+ *           type: boolean
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Success
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: number
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/User'
+ *       401:
+ *         description: Not authorized
+ */
+
+/**
+ * @swagger
+ * /api/users/teachers:
+ *   get:
+ *     summary: Get all teachers
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: isActive
+ *         schema:
+ *           type: boolean
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Success
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: number
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/User'
+ *       401:
+ *         description: Not authorized
+ */
+
+router.get('/students', getStudents);
+router.get('/teachers', getTeachers);
+
 /**
  * @swagger
  * /api/users:
@@ -202,5 +282,6 @@ router.route('/:id')
  */
 
 router.put('/profile/:id', updateProfile);
+
 
 module.exports = router;

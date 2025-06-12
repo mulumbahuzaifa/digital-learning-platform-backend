@@ -1,33 +1,37 @@
+const asyncHandler = require("../middleware/async");
 const Assignment = require("../models/Assignment");
 const Class = require("../models/Class");
 const Subject = require("../models/Subject");
-const Submission = require("../models/Submission");
+const AcademicEnrollment = require("../models/AcademicEnrollment");
 const ErrorResponse = require("../utils/errorResponse");
 
 // @desc    Get all assignments
 // @route   GET /api/assignments
-// @access  Private
+// @access  Private (Teacher, Admin)
 exports.getAssignments = async (req, res, next) => {
   try {
+    // Check if user is teacher or admin
+    if (!["teacher", "admin"].includes(req.user.role)) {
+      return next(
+        new ErrorResponse("Not authorized to view all assignments", 403)
+      );
+    }
+
+    const { class: classId, subject, status, type } = req.query;
     let query = {};
 
-    // Filter by class if provided
-    if (req.query.class) {
-      query.class = req.query.class;
-    }
+    if (classId) query.class = classId;
+    if (subject) query.subject = subject;
+    if (status) query.status = status;
+    if (type) query.assignmentType = type;
 
-    // Filter by subject if provided
-    if (req.query.subject) {
-      query.subject = req.query.subject;
-    }
-
-    // Filter by status if provided
-    if (req.query.status) {
-      query.status = req.query.status;
+    // If teacher, only show their assignments
+    if (req.user.role === "teacher") {
+      query.createdBy = req.user.id;
     }
 
     const assignments = await Assignment.find(query)
-      .populate("class", "name code")
+      .populate("class", "name code level stream")
       .populate("subject", "name code")
       .populate("createdBy", "firstName lastName")
       .sort("-createdAt");
@@ -48,7 +52,7 @@ exports.getAssignments = async (req, res, next) => {
 exports.getAssignment = async (req, res, next) => {
   try {
     const assignment = await Assignment.findById(req.params.id)
-      .populate("class", "name code")
+      .populate("class", "name code level stream")
       .populate("subject", "name code")
       .populate("createdBy", "firstName lastName");
 
@@ -61,12 +65,40 @@ exports.getAssignment = async (req, res, next) => {
       );
     }
 
-    // Check if user has access to this assignment
-    const hasAccess = await checkAssignmentAccess(req.user, assignment);
-    if (!hasAccess) {
-      return next(
-        new ErrorResponse("Not authorized to access this assignment", 403)
-      );
+    // Check access based on role
+    if (req.user.role === "student") {
+      // Check if student is enrolled in the class
+      const enrollment = await AcademicEnrollment.findOne({
+        student: req.user.id,
+        class: assignment.class,
+        status: "active",
+      });
+
+      if (!enrollment) {
+        return next(
+          new ErrorResponse("You are not enrolled in this class", 403)
+        );
+      }
+    } else if (
+      req.user.role === "teacher" &&
+      assignment.createdBy.toString() !== req.user.id
+    ) {
+      // Check if teacher is assigned to the subject
+      const classObj = await Class.findById(assignment.class);
+      const teacherAssigned = classObj.subjects
+        .find((s) => s.subject.toString() === assignment.subject.toString())
+        ?.teachers.some(
+          (t) => t.teacher.toString() === req.user.id && t.status === "approved"
+        );
+
+      if (!teacherAssigned) {
+        return next(
+          new ErrorResponse(
+            "You are not authorized to view this assignment",
+            403
+          )
+        );
+      }
     }
 
     res.status(200).json({
@@ -83,7 +115,7 @@ exports.getAssignment = async (req, res, next) => {
 // @access  Private/Teacher
 exports.createAssignment = async (req, res, next) => {
   try {
-    // Verify user is a teacher
+    // Check if user is teacher
     if (req.user.role !== "teacher") {
       return next(
         new ErrorResponse("Only teachers can create assignments", 403)
@@ -98,39 +130,46 @@ exports.createAssignment = async (req, res, next) => {
       );
     }
 
-    // Verify subject exists
-    const subject = await Subject.findById(req.body.subject);
-    if (!subject) {
+    // Verify subject exists in class
+    const subjectExists = classObj.subjects.some(
+      (s) => s.subject.toString() === req.body.subject
+    );
+    if (!subjectExists) {
+      return next(new ErrorResponse("Subject not found in this class", 404));
+    }
+
+    // Verify teacher is assigned to this subject
+    const teacherAssigned = classObj.subjects
+      .find((s) => s.subject.toString() === req.body.subject)
+      ?.teachers.some(
+        (t) => t.teacher.toString() === req.user.id && t.status === "approved"
+      );
+
+    if (!teacherAssigned) {
       return next(
         new ErrorResponse(
-          `Subject not found with id of ${req.body.subject}`,
-          404
+          "You are not authorized to create assignments for this subject",
+          403
         )
       );
     }
 
-    // Check if teacher is assigned to this subject in this class
-    const isAssigned = classObj.subjects.some(
-      (s) =>
-        s.subject.toString() === req.body.subject &&
-        s.teachers.some(
-          (t) => t.teacher.toString() === req.user.id && t.status === "approved"
-        )
-    );
+    // Validate assignment type
+    const validTypes = ["homework", "quiz", "project", "exam"];
+    if (!validTypes.includes(req.body.assignmentType)) {
+      return next(new ErrorResponse("Invalid assignment type", 400));
+    }
 
-    if (!isAssigned) {
-      return next(
-        new ErrorResponse(
-          "You are not assigned to teach this subject in this class",
-          403
-        )
-      );
+    // Validate due date
+    if (new Date(req.body.dueDate) <= new Date()) {
+      return next(new ErrorResponse("Due date must be in the future", 400));
     }
 
     // Create assignment
     const assignment = await Assignment.create({
       ...req.body,
       createdBy: req.user.id,
+      status: "draft", // Default status
     });
 
     res.status(201).json({
@@ -144,9 +183,16 @@ exports.createAssignment = async (req, res, next) => {
 
 // @desc    Update assignment
 // @route   PUT /api/assignments/:id
-// @access  Private/Teacher or Admin
+// @access  Private/Teacher
 exports.updateAssignment = async (req, res, next) => {
   try {
+    // Check if user is teacher
+    if (req.user.role !== "teacher") {
+      return next(
+        new ErrorResponse("Only teachers can update assignments", 403)
+      );
+    }
+
     let assignment = await Assignment.findById(req.params.id);
 
     if (!assignment) {
@@ -158,36 +204,67 @@ exports.updateAssignment = async (req, res, next) => {
       );
     }
 
-    // Check if user is owner or admin
-    if (
-      req.user.role !== "admin" &&
-      assignment.createdBy.toString() !== req.user.id
-    ) {
+    // Verify teacher is the creator
+    if (assignment.createdBy.toString() !== req.user.id) {
       return next(
-        new ErrorResponse("Not authorized to update this assignment", 403)
+        new ErrorResponse(
+          "You are not authorized to update this assignment",
+          403
+        )
       );
     }
 
-    // Verify class if being updated
-    if (req.body.class) {
-      const classObj = await Class.findById(req.body.class);
-      if (!classObj) {
+    // If changing class or subject, verify teacher is assigned
+    if (req.body.class || req.body.subject) {
+      const classObj = await Class.findById(req.body.class || assignment.class);
+      const subjectId = req.body.subject || assignment.subject;
+
+      const teacherAssigned = classObj.subjects
+        .find((s) => s.subject.toString() === subjectId.toString())
+        ?.teachers.some(
+          (t) => t.teacher.toString() === req.user.id && t.status === "approved"
+        );
+
+      if (!teacherAssigned) {
         return next(
-          new ErrorResponse(`Class not found with id of ${req.body.class}`, 404)
+          new ErrorResponse(
+            "You are not authorized to assign to this class/subject",
+            403
+          )
         );
       }
     }
 
-    // Verify subject if being updated
-    if (req.body.subject) {
-      const subject = await Subject.findById(req.body.subject);
-      if (!subject) {
-        return next(
-          new ErrorResponse(
-            `Subject not found with id of ${req.body.subject}`,
-            404
-          )
-        );
+    // Validate assignment type if being updated
+    if (req.body.assignmentType) {
+      const validTypes = ["homework", "quiz", "project", "exam"];
+      if (!validTypes.includes(req.body.assignmentType)) {
+        return next(new ErrorResponse("Invalid assignment type", 400));
+      }
+    }
+
+    // Validate due date if being updated
+    if (req.body.dueDate && new Date(req.body.dueDate) <= new Date()) {
+      return next(new ErrorResponse("Due date must be in the future", 400));
+    }
+
+    // Prevent updating certain fields if assignment is published
+    if (assignment.status === "published") {
+      const restrictedFields = [
+        "class",
+        "subject",
+        "assignmentType",
+        "totalMarks",
+      ];
+      for (const field of restrictedFields) {
+        if (req.body[field]) {
+          return next(
+            new ErrorResponse(
+              `Cannot update ${field} of published assignment`,
+              400
+            )
+          );
+        }
       }
     }
 
@@ -207,9 +284,16 @@ exports.updateAssignment = async (req, res, next) => {
 
 // @desc    Delete assignment
 // @route   DELETE /api/assignments/:id
-// @access  Private/Teacher or Admin
+// @access  Private/Teacher
 exports.deleteAssignment = async (req, res, next) => {
   try {
+    // Check if user is teacher
+    if (req.user.role !== "teacher") {
+      return next(
+        new ErrorResponse("Only teachers can delete assignments", 403)
+      );
+    }
+
     const assignment = await Assignment.findById(req.params.id);
 
     if (!assignment) {
@@ -221,17 +305,22 @@ exports.deleteAssignment = async (req, res, next) => {
       );
     }
 
-    // Check if user is owner or admin
-    if (
-      req.user.role !== "admin" &&
-      assignment.createdBy.toString() !== req.user.id
-    ) {
+    // Verify teacher is the creator
+    if (assignment.createdBy.toString() !== req.user.id) {
       return next(
-        new ErrorResponse("Not authorized to delete this assignment", 403)
+        new ErrorResponse(
+          "You are not authorized to delete this assignment",
+          403
+        )
       );
     }
 
-    await assignment.remove();
+    // Prevent deleting published assignments
+    if (assignment.status === "published") {
+      return next(new ErrorResponse("Cannot delete published assignment", 400));
+    }
+
+    await assignment.deleteOne();
 
     res.status(200).json({
       success: true,
@@ -242,115 +331,109 @@ exports.deleteAssignment = async (req, res, next) => {
   }
 };
 
-// @desc    Publish assignment
-// @route   PUT /api/assignments/:id/publish
+// @desc    Get assignments for a student
+// @route   GET /api/assignments/student
+// @access  Private/Student
+exports.getStudentAssignments = async (req, res, next) => {
+  try {
+    // Check if user is student
+    if (req.user.role !== "student") {
+      return next(
+        new ErrorResponse("Only students can access this endpoint", 403)
+      );
+    }
+
+    // Get student's current enrollments
+    const enrollments = await AcademicEnrollment.find({
+      student: req.user.id,
+      status: "active",
+    }).populate("class", "name code level stream");
+
+    if (!enrollments.length) {
+      return res.status(200).json({
+        success: true,
+        count: 0,
+        data: [],
+      });
+    }
+
+    // Get assignments for enrolled classes
+    const assignments = await Assignment.find({
+      class: { $in: enrollments.map((e) => e.class._id) },
+      status: "published",
+    })
+      .populate("class", "name code level stream")
+      .populate("subject", "name code")
+      .populate("createdBy", "firstName lastName")
+      .sort("-createdAt");
+
+    // Transform response to include enrollment info
+    const transformedAssignments = assignments.map((assignment) => {
+      const enrollment = enrollments.find(
+        (e) => e.class._id.toString() === assignment.class._id.toString()
+      );
+      return {
+        ...assignment.toObject(),
+        academicYear: enrollment.academicYear,
+        term: enrollment.term,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      count: transformedAssignments.length,
+      data: transformedAssignments,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Get assignments for a teacher
+// @route   GET /api/assignments/teacher
 // @access  Private/Teacher
-exports.publishAssignment = async (req, res, next) => {
+exports.getTeacherAssignments = async (req, res, next) => {
   try {
-    const assignment = await Assignment.findById(req.params.id);
-
-    if (!assignment) {
+    // Check if user is teacher
+    if (req.user.role !== "teacher") {
       return next(
-        new ErrorResponse(
-          `Assignment not found with id of ${req.params.id}`,
-          404
-        )
+        new ErrorResponse("Only teachers can access this endpoint", 403)
       );
     }
 
-    // Check if user is owner
-    if (assignment.createdBy.toString() !== req.user.id) {
-      return next(
-        new ErrorResponse("Not authorized to publish this assignment", 403)
-      );
+    // Get classes where teacher is assigned
+    const classes = await Class.find({
+      "subjects.teachers": {
+        $elemMatch: {
+          teacher: req.user.id,
+          status: "approved",
+        },
+      },
+    });
+
+    if (!classes.length) {
+      return res.status(200).json({
+        success: true,
+        count: 0,
+        data: [],
+      });
     }
 
-    assignment.status = "published";
-    await assignment.save();
+    // Get assignments for these classes
+    const assignments = await Assignment.find({
+      class: { $in: classes.map((c) => c._id) },
+      createdBy: req.user.id,
+    })
+      .populate("class", "name code level stream")
+      .populate("subject", "name code")
+      .sort("-createdAt");
 
     res.status(200).json({
       success: true,
-      data: assignment,
+      count: assignments.length,
+      data: assignments,
     });
   } catch (err) {
     next(err);
   }
-};
-
-// @desc    Get submissions for assignment
-// @route   GET /api/assignments/:id/submissions
-// @access  Private/Teacher or Admin
-exports.getAssignmentSubmissions = async (req, res, next) => {
-  try {
-    const assignment = await Assignment.findById(req.params.id);
-
-    if (!assignment) {
-      return next(
-        new ErrorResponse(
-          `Assignment not found with id of ${req.params.id}`,
-          404
-        )
-      );
-    }
-
-    // Check if user is owner or admin
-    if (
-      req.user.role !== "admin" &&
-      assignment.createdBy.toString() !== req.user.id
-    ) {
-      return next(
-        new ErrorResponse(
-          "Not authorized to view submissions for this assignment",
-          403
-        )
-      );
-    }
-
-    const submissions = await Submission.find({ assignment: req.params.id })
-      .populate("student", "firstName lastName")
-      .sort("submitDate");
-
-    res.status(200).json({
-      success: true,
-      count: submissions.length,
-      data: submissions,
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-
-// Helper function to check assignment access
-const checkAssignmentAccess = async (user, assignment) => {
-  // Admins have access to everything
-  if (user.role === "admin") return true;
-
-  // Assignment creator has access
-  if (assignment.createdBy.toString() === user.id) return true;
-
-  // For teachers - check if they teach this subject in this class
-  if (user.role === "teacher") {
-    const classObj = await Class.findById(assignment.class);
-    if (!classObj) return false;
-
-    return classObj.subjects.some(
-      (s) =>
-        s.subject.toString() === assignment.subject.toString() &&
-        s.teachers.some(
-          (t) => t.teacher.toString() === user.id && t.status === "approved"
-        )
-    );
-  }
-
-  // For students - check if they're in this class
-  if (user.role === "student") {
-    const classObj = await Class.findById(assignment.class);
-    if (!classObj) return false;
-
-    return classObj.students.some(
-      (s) => s.student.toString() === user.id && s.status === "approved"
-    );
-  }
-
-  return false;
 };

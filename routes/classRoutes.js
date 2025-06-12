@@ -10,8 +10,6 @@ const {
   removeSubjectFromClass,
   assignTeacherToSubject,
   removeTeacherFromSubject,
-  addStudentToClass,
-  removeStudentFromClass,
   assignPrefect,
   removePrefect,
   getMyClasses,
@@ -63,7 +61,7 @@ const { protect, role } = require("../middleware/auth");
  *                   type: array
  *                   items:
  *                     $ref: '#/components/schemas/Class'
- *   
+ *
  *   post:
  *     summary: Create new class
  *     description: Create a new class (Admin only)
@@ -106,7 +104,7 @@ const { protect, role } = require("../middleware/auth");
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Class'
- *   
+ *
  *   put:
  *     summary: Update class
  *     tags: [Classes]
@@ -127,7 +125,7 @@ const { protect, role } = require("../middleware/auth");
  *     responses:
  *       200:
  *         description: Success
- *   
+ *
  *   delete:
  *     summary: Delete class
  *     tags: [Classes]
@@ -317,166 +315,6 @@ const { protect, role } = require("../middleware/auth");
 
 /**
  * @swagger
- * /api/classes/{id}/students:
- *   post:
- *     summary: Add student to class
- *     description: Enroll a student in a class (Admin only)
- *     tags: [Classes]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Class ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - student
- *             properties:
- *               student:
- *                 type: string
- *                 description: Student ID to enroll
- *               status:
- *                 type: string
- *                 enum: [pending, approved, rejected]
- *                 default: approved
- *               enrollmentType:
- *                 type: string
- *                 enum: [new, transfer]
- *                 default: new
- *     responses:
- *       200:
- *         description: Student enrolled successfully
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Class'
- *       404:
- *         description: Class or student not found
- *       400:
- *         description: Student already enrolled
- */
-
-/**
- * @swagger
- * /api/classes/{id}/students/{studentId}:
- *   delete:
- *     summary: Remove student from class
- *     description: Remove a student from a class (Admin only)
- *     tags: [Classes]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Class ID
- *       - in: path
- *         name: studentId
- *         required: true
- *         schema:
- *           type: string
- *         description: Student ID to remove
- *     responses:
- *       200:
- *         description: Student removed successfully
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Class'
- *       404:
- *         description: Class or student not found
- */
-
-/**
- * @swagger
- * /api/classes/{id}/prefects:
- *   post:
- *     summary: Assign prefect to class
- *     description: Assign a student as prefect in a class (Admin only)
- *     tags: [Classes]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Class ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - student
- *               - position
- *             properties:
- *               student:
- *                 type: string
- *                 description: Student ID to assign as prefect
- *               position:
- *                 type: string
- *                 description: Prefect position title
- *     responses:
- *       200:
- *         description: Prefect assigned successfully
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Class'
- *       404:
- *         description: Class or student not found
- *       400:
- *         description: Position already assigned or student not in class
- */
-
-/**
- * @swagger
- * /api/classes/{id}/prefects/{prefectId}:
- *   delete:
- *     summary: Remove prefect from class
- *     description: Remove a prefect assignment from a class (Admin only)
- *     tags: [Classes]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Class ID
- *       - in: path
- *         name: prefectId
- *         required: true
- *         schema:
- *           type: string
- *         description: Prefect assignment ID to remove
- *     responses:
- *       200:
- *         description: Prefect removed successfully
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Class'
- *       404:
- *         description: Class or prefect assignment not found
- */
-
-/**
- * @swagger
  * /api/classes/my-classes:
  *   get:
  *     summary: Get my classes
@@ -502,14 +340,17 @@ const { protect, role } = require("../middleware/auth");
  *                     $ref: '#/components/schemas/Class'
  */
 
+// Protect all routes
 router.use(protect);
+
+router.get("/my-classes", getMyClasses);
 
 router.route("/").get(getClasses).post(role("admin"), createClass);
 
 router
   .route("/:id")
   .get(getClass)
-  .put(role("admin"), updateClass)
+  .put(role("admin", "teacher"), updateClass)
   .delete(role("admin"), deleteClass);
 
 router.route("/:id/subjects").post(role("admin"), addSubjectToClass);
@@ -526,18 +367,10 @@ router
   .route("/:id/subjects/:subjectId/teachers/:teacherId")
   .delete(role("admin"), removeTeacherFromSubject);
 
-router.route('/:id/students')
-  .post(role('admin'), addStudentToClass);
+router.route("/:id/prefects").post(role("admin", "teacher"), assignPrefect);
 
-router.route('/:id/students/:studentId')
-  .delete(role('admin'), removeStudentFromClass);
-
-router.route('/:id/prefects')
-  .post(role('admin'), assignPrefect);
-
-router.route('/:id/prefects/:prefectId')
-  .delete(role('admin'), removePrefect);
-
-router.get("/my-classes", getMyClasses);
+router
+  .route("/:id/prefects/:prefectId")
+  .delete(role("admin", "teacher"), removePrefect);
 
 module.exports = router;

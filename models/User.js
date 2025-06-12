@@ -53,7 +53,7 @@ const jwt = require("jsonwebtoken");
  *         updatedAt:
  *           type: string
  *           format: date-time
- * 
+ *
  *     UserProfile:
  *       type: object
  *       properties:
@@ -107,7 +107,7 @@ const jwt = require("jsonwebtoken");
  *           description: Unique teacher identifier
  *         department:
  *           type: string
- * 
+ *
  *     ClassRequest:
  *       type: object
  *       properties:
@@ -136,7 +136,7 @@ const jwt = require("jsonwebtoken");
  *         roleInClass:
  *           type: string
  *           enum: [teacher, student]
- * 
+ *
  *     Qualification:
  *       type: object
  *       properties:
@@ -252,6 +252,10 @@ const UserSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  remember: {
+    type: Boolean,
+    default: false,
+  },
   isActive: { type: Boolean, default: true },
   lastLogin: { type: Date },
   createdAt: {
@@ -269,14 +273,14 @@ UserSchema.pre("save", async function (next) {
 });
 
 // Generate email verification token
-UserSchema.methods.getVerificationToken = function() {
-  const verificationToken = crypto.randomBytes(20).toString('hex');
-  
+UserSchema.methods.getVerificationToken = function () {
+  const verificationToken = crypto.randomBytes(20).toString("hex");
+
   // Hash token and set to emailVerificationToken field
   this.emailVerificationToken = crypto
-    .createHash('sha256')
+    .createHash("sha256")
     .update(verificationToken)
-    .digest('hex');
+    .digest("hex");
 
   // Set expire time (30 minutes)
   this.emailVerificationExpire = Date.now() + 30 * 60 * 1000;
@@ -290,14 +294,14 @@ UserSchema.methods.matchPassword = async function (password) {
 };
 
 // Generate password reset token
-UserSchema.methods.getResetPasswordToken = function() {
-  const resetToken = crypto.randomBytes(20).toString('hex');
-  
+UserSchema.methods.getResetPasswordToken = function () {
+  const resetToken = crypto.randomBytes(20).toString("hex");
+
   // Hash token and set to resetPasswordToken field
   this.resetPasswordToken = crypto
-    .createHash('sha256')
+    .createHash("sha256")
     .update(resetToken)
-    .digest('hex');
+    .digest("hex");
 
   // Set expire time (10 minutes)
   this.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
@@ -306,9 +310,9 @@ UserSchema.methods.getResetPasswordToken = function() {
 };
 
 // Generate JWT token
-UserSchema.methods.getSignedJwtToken = function() {
+UserSchema.methods.getSignedJwtToken = function () {
   return jwt.sign({ id: this._id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRE
+    expiresIn: process.env.JWT_EXPIRE,
   });
 };
 

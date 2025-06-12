@@ -199,6 +199,6 @@ router.post("/forgotpassword", forgotPassword);
  *       400:
  *         description: Invalid token
  */
-router.put("/resetpassword/:resettoken", resetPassword);
+router.post("/resetpassword", resetPassword);
 
 module.exports = router;

@@ -145,7 +145,7 @@ exports.deleteUser = asyncHandler(async (req, res, next) => {
     );
   }
 
-  await user.remove();
+  await user.deleteOne();
 
   res.status(200).json({
     success: true,
@@ -182,6 +182,59 @@ exports.updateProfile = asyncHandler(async (req, res, next) => {
   });
 });
 
+// @desc    Get all students
+// @route   GET /api/users/students
+// @access  Private/Owner or Admin
+exports.getStudents = asyncHandler(async (req, res, next) => {
+  const { isActive, search } = req.query;
+  let query = { role: 'student' };
+  
+  if (isActive) query.isActive = isActive === 'true';
+  if (search) {
+    query.$or = [
+      { firstName: { $regex: search, $options: 'i' } },
+      { lastName: { $regex: search, $options: 'i' } },
+      { email: { $regex: search, $options: 'i' } }
+    ];
+  }
+
+  const students = await User.find(query)
+    .select('-password -resetPasswordToken -resetPasswordExpire')
+    .sort('-createdAt');
+
+  res.status(200).json({ 
+    success: true, 
+    count: students.length, 
+    data: students 
+  });
+});
+
+// @desc    Get all teachers
+// @route   GET /api/users/teachers
+// @access  Private
+exports.getTeachers = asyncHandler(async (req, res, next) => {
+  const { isActive, search } = req.query;
+  let query = { role: 'teacher' };
+  
+  if (isActive) query.isActive = isActive === 'true';
+  if (search) {
+    query.$or = [
+      { firstName: { $regex: search, $options: 'i' } },
+      { lastName: { $regex: search, $options: 'i' } },
+      { email: { $regex: search, $options: 'i' } }
+    ];
+  }
+
+  const teachers = await User.find(query)
+    .select('-password -resetPasswordToken -resetPasswordExpire')
+    .sort('-createdAt');
+
+  res.status(200).json({ 
+    success: true, 
+    count: teachers.length, 
+    data: teachers 
+  });
+});
 // @desc    Handle class enrollment request
 // @route   PUT /api/users/enrollment/:userId/:requestId
 // @access  Private/Admin

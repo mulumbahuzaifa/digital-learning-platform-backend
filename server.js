@@ -6,9 +6,14 @@ const morgan = require("morgan");
 const path = require("path");
 const http = require("http"); // Added for Socket.IO
 const { ErrorResponse, errorHandler } = require("./middleware/error");
+const config = require("./config/config");
+const setupWebSocket = require("./config/websocket");
 
 // Load env vars
 dotenv.config();
+
+// Create Express app
+const app = express();
 
 // Connect to DB
 mongoose
@@ -16,18 +21,17 @@ mongoose
   .then(() => console.log("MongoDB Connected"))
   .catch((err) => console.log(err));
 
-// Initialize app
-const app = express();
-const server = http.createServer(app); // Create HTTP server for Socket.IO
+// Initialize HTTP server
+const server = http.createServer(app);
 
 // Socket.IO setup
 const io = require("socket.io")(server, {
   cors: {
     origin: process.env.CLIENT_URL || "http://localhost:3000",
     methods: ["GET", "POST"],
-    credentials: true
+    credentials: true,
   },
-  transports: ["websocket", "polling"]
+  transports: ["websocket", "polling"],
 });
 
 // Socket.IO connection handler
@@ -52,10 +56,12 @@ io.on("connection", (socket) => {
 app.set("io", io);
 
 // Middleware
-app.use(cors({
-  origin: process.env.CLIENT_URL || "http://localhost:3000",
-  credentials: true
-}));
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    credentials: true,
+  })
+);
 
 app.use(express.json());
 
@@ -84,18 +90,36 @@ app.use("/api/calendar", require("./routes/calendarRoutes"));
 app.use("/api/feedback", require("./routes/feedbackRoutes"));
 app.use("/api/gradebook", require("./routes/gradebookRoutes"));
 app.use("/api/attendance", require("./routes/attendanceRoutes"));
-
+app.use("/api/live-sessions", require("./routes/liveSessionRoutes"));
+app.use("/api/enrollments", require("./routes/enrollmentRoutes"));
 // Error handling middleware
 app.use(errorHandler);
 
+// Setup WebSocket
+const ws = setupWebSocket(server);
+
+// Make WebSocket instance available globally
+app.set("ws", ws);
+
 const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, () => { // Changed from app.listen to server.listen
+server.listen(PORT, () => {
+  // Changed from app.listen to server.listen
   console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
 });
 
 // Handle unhandled promise rejections
-process.on("unhandledRejection", (err, promise) => {
-  console.log(`Error: ${err.message}`);
-  server.close(() => process.exit(1));
+process.on("unhandledRejection", (err) => {
+  console.log("UNHANDLED REJECTION! 💥 Shutting down...");
+  console.log(err.name, err.message);
+  server.close(() => {
+    process.exit(1);
+  });
+});
+
+// Handle uncaught exceptions
+process.on("uncaughtException", (err) => {
+  console.log("UNCAUGHT EXCEPTION! 💥 Shutting down...");
+  console.log(err.name, err.message);
+  process.exit(1);
 });

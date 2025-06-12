@@ -1,53 +1,92 @@
 const Submission = require("../models/Submission");
 const Assignment = require("../models/Assignment");
-const Class = require("../models/Class");
+const AcademicEnrollment = require("../models/AcademicEnrollment");
 const ErrorResponse = require("../utils/errorResponse");
 const path = require("path");
 const fs = require("fs");
+const User = require("../models/User");
+const { validateObjectId } = require("../utils/validators");
+const { calculateGrade } = require("../utils/gradingUtils");
+const { checkPlagiarism } = require("../utils/plagiarismChecker");
+const { sendNotification } = require("../utils/notifications");
+const { getFileInfo } = require("../utils/fileUpload");
+
+const asyncHandler = require("../middleware/async");
+
+// @desc    Grade a submission
+// @route   PUT /api/submissions/:id/grade
+// @access  Private (Teacher, Admin)
+exports.gradeSubmission = asyncHandler(async (req, res, next) => {
+  const submission = await Submission.findById(req.params.id);
+
+  if (!submission) {
+    return next(new ErrorResponse("Submission not found", 404));
+  }
+
+  // Check if user is teacher or admin
+  if (!["teacher", "admin"].includes(req.user.role)) {
+    return next(new ErrorResponse("Not authorized to grade submissions", 403));
+  }
+
+  // Update submission with grade
+  submission.grade = req.body.grade;
+  submission.feedback = req.body.feedback;
+  submission.gradedBy = req.user.id;
+  submission.gradedAt = Date.now();
+  submission.status = "graded";
+
+  await submission.save();
+
+  // Notify student
+  await sendNotification({
+    recipient: submission.student,
+    type: "submission_graded",
+    title: "Submission Graded",
+    message: `Your submission for ${submission.assignment.title} has been graded.`,
+    data: {
+      submissionId: submission._id,
+      assignmentId: submission.assignment,
+      grade: submission.grade,
+    },
+  });
+
+  res.status(200).json({
+    success: true,
+    data: submission,
+  });
+});
 
 // @desc    Get all submissions
 // @route   GET /api/submissions
-// @access  Private/Teacher or Admin
+// @access  Private (Teacher, Admin)
 exports.getSubmissions = async (req, res, next) => {
   try {
+    // Check if user is teacher or admin
+    if (!["teacher", "admin"].includes(req.user.role)) {
+      return next(
+        new ErrorResponse("Not authorized to view all submissions", 403)
+      );
+    }
+
+    const { assignment, student, status } = req.query;
     let query = {};
 
-    // Filter by assignment if provided
-    if (req.query.assignment) {
-      query.assignment = req.query.assignment;
-    }
+    if (assignment) query.assignment = assignment;
+    if (student) query.student = student;
+    if (status) query.status = status;
 
-    // Filter by student if provided
-    if (req.query.student) {
-      query.student = req.query.student;
-    }
-
-    // Filter by class if provided
-    if (req.query.class) {
-      query.class = req.query.class;
-    }
-
-    // Filter by subject if provided
-    if (req.query.subject) {
-      query.subject = req.query.subject;
-    }
-
-    // For students, only show their own submissions
-    if (req.user.role === "student") {
-      query.student = req.user.id;
-    }
-
-    // For teachers, only show submissions for their classes/subjects
+    // If teacher, only show submissions for their assignments
     if (req.user.role === "teacher") {
-      const assignments = await Assignment.find({ createdBy: req.user.id });
+      const assignments = await Assignment.find({
+        createdBy: req.user.id,
+      }).select("_id");
       query.assignment = { $in: assignments.map((a) => a._id) };
     }
 
     const submissions = await Submission.find(query)
-      .populate("assignment", "title dueDate")
+      .populate("assignment", "title dueDate totalMarks")
       .populate("student", "firstName lastName")
-      .populate("class", "name code")
-      .populate("subject", "name code")
+      .populate("enrollment", "academicYear term")
       .sort("-submitDate");
 
     res.status(200).json({
@@ -68,8 +107,7 @@ exports.getSubmission = async (req, res, next) => {
     const submission = await Submission.findById(req.params.id)
       .populate("assignment", "title dueDate totalMarks")
       .populate("student", "firstName lastName")
-      .populate("class", "name code")
-      .populate("subject", "name code");
+      .populate("enrollment", "academicYear term");
 
     if (!submission) {
       return next(
@@ -80,12 +118,26 @@ exports.getSubmission = async (req, res, next) => {
       );
     }
 
-    // Check if user has access to this submission
-    const hasAccess = await checkSubmissionAccess(req.user, submission);
-    if (!hasAccess) {
-      return next(
-        new ErrorResponse("Not authorized to access this submission", 403)
-      );
+    // Check access based on role
+    if (req.user.role === "student") {
+      if (submission.student.toString() !== req.user.id) {
+        return next(
+          new ErrorResponse(
+            "You are not authorized to view this submission",
+            403
+          )
+        );
+      }
+    } else if (req.user.role === "teacher") {
+      const assignment = await Assignment.findById(submission.assignment);
+      if (!assignment || assignment.createdBy.toString() !== req.user.id) {
+        return next(
+          new ErrorResponse(
+            "You are not authorized to view this submission",
+            403
+          )
+        );
+      }
     }
 
     res.status(200).json({
@@ -102,126 +154,134 @@ exports.getSubmission = async (req, res, next) => {
 // @access  Private/Student
 exports.createSubmission = async (req, res, next) => {
   try {
-    // Verify user is a student
+    // Check if user is student
     if (req.user.role !== "student") {
       return next(
-        new ErrorResponse("Only students can submit assignments", 403)
+        new ErrorResponse("Only students can create submissions", 403)
       );
     }
 
     // Verify assignment exists and is published
     const assignment = await Assignment.findById(req.body.assignment);
-    if (!assignment || assignment.status !== "published") {
+    if (!assignment) {
       return next(
-        new ErrorResponse(`Assignment not found or not published`, 404)
+        new ErrorResponse(
+          `Assignment not found with id of ${req.body.assignment}`,
+          404
+        )
       );
     }
 
-    // Check if assignment is past due
-    if (
-      new Date() > new Date(assignment.dueDate) &&
-      !assignment.allowLateSubmission
-    ) {
-      return next(new ErrorResponse("Assignment submission is closed", 400));
+    if (assignment.status !== "published") {
+      return next(
+        new ErrorResponse("Cannot submit to unpublished assignment", 400)
+      );
     }
 
-    // Check if student is in the class
-    const classObj = await Class.findById(assignment.class);
-    if (
-      !classObj ||
-      !classObj.students.some(
-        (s) => s.student.toString() === req.user.id && s.status === "approved"
-      )
-    ) {
+    // Verify student is enrolled in the class
+    const enrollment = await AcademicEnrollment.findOne({
+      student: req.user.id,
+      class: assignment.class,
+      status: "active",
+    });
+
+    if (!enrollment) {
       return next(new ErrorResponse("You are not enrolled in this class", 403));
     }
 
-    // Check if student already submitted
-    const existingSubmission = await Submission.findOne({
+    // Check if submission already exists
+    let submission = await Submission.findOne({
       assignment: req.body.assignment,
       student: req.user.id,
     });
 
-    if (existingSubmission) {
+    // Validate submission content
+    if (
+      !req.body.textSubmission &&
+      (!req.body.files || req.body.files.length === 0)
+    ) {
       return next(
-        new ErrorResponse("You have already submitted this assignment", 400)
+        new ErrorResponse("Submission must include either text or files", 400)
       );
     }
 
-    // Handle file upload if required
-    let attachments = [];
-    if (assignment.submissionType !== "text" && req.files) {
-      const maxSize = 10 * 1024 * 1024; // 10MB
+    // Validate file types and sizes if files are provided
+    if (req.body.files && req.body.files.length > 0) {
+      const maxFileSize = 10 * 1024 * 1024; // 10MB
+      const allowedTypes = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "image/jpeg",
+        "image/png",
+      ];
 
-      // Handle single file or multiple files
-      const files = Array.isArray(req.files.files)
-        ? req.files.files
-        : [req.files.files];
-
-      for (const file of files) {
-        // Check file size
-        if (file.size > maxSize) {
+      for (const file of req.body.files) {
+        if (file.size > maxFileSize) {
           return next(
             new ErrorResponse(
-              `File ${file.name} size cannot be more than 10MB`,
+              `File ${file.originalname} exceeds maximum size of 10MB`,
               400
             )
           );
         }
-
-        // Check file format if specified
-        if (assignment.allowedFormats && assignment.allowedFormats.length > 0) {
-          const fileExt = path.extname(file.name).toLowerCase().substring(1);
-          if (!assignment.allowedFormats.includes(fileExt)) {
-            return next(
-              new ErrorResponse(`File ${file.name} format not allowed`, 400)
-            );
-          }
+        if (!allowedTypes.includes(file.mimetype)) {
+          return next(
+            new ErrorResponse(`File type ${file.mimetype} is not allowed`, 400)
+          );
         }
-
-        // Create custom filename
-        const fileExt = path.extname(file.name);
-        const fileName = `submission_${req.user.id}_${Date.now()}_${file.name}`;
-        const uploadPath = path.join(
-          __dirname,
-          "../uploads/submissions",
-          fileName
-        );
-
-        // Move file to uploads folder
-        await file.mv(uploadPath);
-
-        attachments.push({
-          url: `/uploads/submissions/${fileName}`,
-          name: file.name,
-          type: file.mimetype,
-          size: file.size,
-        });
       }
     }
 
-    // Calculate if submission is late
-    const isLate = new Date() > new Date(assignment.dueDate);
-    const lateDays = isLate
-      ? Math.ceil(
-          (new Date() - new Date(assignment.dueDate)) / (1000 * 60 * 60 * 24)
-        )
-      : 0;
+    // If submission exists, update it
+    if (submission) {
+      // Check if submission can be updated
+      if (submission.status === "graded") {
+        return next(new ErrorResponse("Cannot update graded submission", 400));
+      }
 
-    // Create submission
-    const submission = await Submission.create({
-      assignment: req.body.assignment,
+      // Get assignment to check due date
+      if (!assignment.allowLateSubmission && new Date() > assignment.dueDate) {
+        return next(
+          new ErrorResponse("Cannot update submission after due date", 400)
+        );
+      }
+
+      // Update existing submission
+      submission = await Submission.findByIdAndUpdate(
+        submission._id,
+        {
+          ...req.body,
+          status: "resubmitted",
+          submitDate: Date.now(),
+          resubmissionCount: (submission.resubmissionCount || 0) + 1,
+        },
+        {
+          new: true,
+          runValidators: true,
+        }
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Submission updated successfully",
+        data: submission,
+      });
+    }
+
+    // Create new submission
+    submission = await Submission.create({
+      ...req.body,
       student: req.user.id,
-      class: assignment.class,
-      subject: assignment.subject,
-      textSubmission: req.body.textSubmission,
-      attachments: attachments,
-      isLate: isLate,
-      lateDays: lateDays,
+      enrollment: enrollment._id,
+      status: "submitted",
+      submitDate: Date.now(),
+      resubmissionCount: 0,
     });
 
     res.status(201).json({
       success: true,
+      message: "Submission created successfully",
       data: submission,
     });
   } catch (err) {
@@ -234,6 +294,13 @@ exports.createSubmission = async (req, res, next) => {
 // @access  Private/Student
 exports.updateSubmission = async (req, res, next) => {
   try {
+    // Check if user is student
+    if (req.user.role !== "student") {
+      return next(
+        new ErrorResponse("Only students can update submissions", 403)
+      );
+    }
+
     let submission = await Submission.findById(req.params.id);
 
     if (!submission) {
@@ -245,34 +312,66 @@ exports.updateSubmission = async (req, res, next) => {
       );
     }
 
-    // Check if user is owner
+    // Verify student is the owner
     if (submission.student.toString() !== req.user.id) {
       return next(
-        new ErrorResponse("Not authorized to update this submission", 403)
+        new ErrorResponse(
+          "You are not authorized to update this submission",
+          403
+        )
       );
     }
 
-    // Check if submission is already graded
+    // Check if submission can be updated
     if (submission.status === "graded") {
-      return next(new ErrorResponse("Cannot update a graded submission", 400));
+      return next(new ErrorResponse("Cannot update graded submission", 400));
     }
 
-    // Get assignment details
+    // Get assignment to check due date
     const assignment = await Assignment.findById(submission.assignment);
-    if (!assignment) {
-      return next(new ErrorResponse("Assignment not found", 404));
+    if (!assignment.allowLateSubmission && new Date() > assignment.dueDate) {
+      return next(
+        new ErrorResponse("Cannot update submission after due date", 400)
+      );
     }
 
-    // Check if assignment is past due
+    // Validate submission content
     if (
-      new Date() > new Date(assignment.dueDate) &&
-      !assignment.allowLateSubmission
+      !req.body.textSubmission &&
+      (!req.body.files || req.body.files.length === 0)
     ) {
-      return next(new ErrorResponse("Assignment submission is closed", 400));
+      return next(
+        new ErrorResponse("Submission must include either text or files", 400)
+      );
     }
 
-    // Handle file updates if needed
-    // (Implementation similar to createSubmission)
+    // Validate file types and sizes if files are provided
+    if (req.body.files && req.body.files.length > 0) {
+      const maxFileSize = 10 * 1024 * 1024; // 10MB
+      const allowedTypes = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "image/jpeg",
+        "image/png",
+      ];
+
+      for (const file of req.body.files) {
+        if (file.size > maxFileSize) {
+          return next(
+            new ErrorResponse(
+              `File ${file.originalname} exceeds maximum size of 10MB`,
+              400
+            )
+          );
+        }
+        if (!allowedTypes.includes(file.mimetype)) {
+          return next(
+            new ErrorResponse(`File type ${file.mimetype} is not allowed`, 400)
+          );
+        }
+      }
+    }
 
     submission = await Submission.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
@@ -288,107 +387,180 @@ exports.updateSubmission = async (req, res, next) => {
   }
 };
 
-// @desc    Grade submission
-// @route   PUT /api/submissions/:id/grade
-// @access  Private/Teacher
-exports.gradeSubmission = async (req, res, next) => {
-  try {
-    let submission = await Submission.findById(req.params.id).populate(
-      "assignment",
-      "totalMarks createdBy"
-    );
+// @desc    Get submissions by assignment
+// @route   GET /api/submissions/assignment/:assignmentId
+// @access  Private (Teacher, Admin)
+exports.getSubmissionsByAssignment = asyncHandler(async (req, res, next) => {
+  const submissions = await Submission.find({
+    assignment: req.params.assignmentId,
+  }).populate({
+    path: "student",
+    select: "name email",
+  });
 
-    if (!submission) {
-      return next(
-        new ErrorResponse(
-          `Submission not found with id of ${req.params.id}`,
-          404
-        )
-      );
-    }
+  res.status(200).json({
+    success: true,
+    count: submissions.length,
+    data: submissions,
+  });
+});
 
-    // Check if user is assignment creator
-    if (submission.assignment.createdBy.toString() !== req.user.id) {
-      return next(
-        new ErrorResponse("Not authorized to grade this submission", 403)
-      );
-    }
+// @desc    Request resubmission
+// @route   PUT /api/submissions/:id/request-resubmission
+// @access  Private (Teacher, Admin)
+exports.requestResubmission = asyncHandler(async (req, res, next) => {
+  const submission = await Submission.findById(req.params.id);
 
-    // Validate marks
-    if (req.body.marksAwarded > submission.assignment.totalMarks) {
-      return next(
-        new ErrorResponse("Marks awarded cannot exceed total marks", 400)
-      );
-    }
-
-    submission.marksAwarded = req.body.marksAwarded;
-    submission.grade = calculateGrade(
-      req.body.marksAwarded,
-      submission.assignment.totalMarks
-    );
-    submission.feedback = req.body.feedback;
-    submission.gradedBy = req.user.id;
-    submission.gradedAt = new Date();
-    submission.status = "graded";
-
-    if (req.body.rubrics) {
-      submission.rubrics = req.body.rubrics;
-    }
-
-    await submission.save();
-
-    res.status(200).json({
-      success: true,
-      data: submission,
-    });
-  } catch (err) {
-    next(err);
+  if (!submission) {
+    return next(new ErrorResponse("Submission not found", 404));
   }
-};
+
+  // Check if user is teacher or admin
+  if (!["teacher", "admin"].includes(req.user.role)) {
+    return next(
+      new ErrorResponse("Not authorized to request resubmission", 403)
+    );
+  }
+
+  submission.status = "resubmission_requested";
+  submission.resubmissionReason = req.body.reason;
+  submission.resubmissionDeadline = req.body.deadline;
+
+  await submission.save();
+
+  // Notify student
+  await sendNotification({
+    recipient: submission.student,
+    type: "resubmission_requested",
+    title: "Resubmission Requested",
+    message: `Your submission for ${submission.assignment.title} needs to be resubmitted.`,
+    data: {
+      submissionId: submission._id,
+      assignmentId: submission.assignment,
+      reason: req.body.reason,
+      deadline: req.body.deadline,
+    },
+  });
+
+  res.status(200).json({
+    success: true,
+    data: submission,
+  });
+});
+
+// @desc    Add parent feedback
+// @route   PUT /api/submissions/:id/parent-feedback
+// @access  Private (Parent)
+exports.addParentFeedback = asyncHandler(async (req, res, next) => {
+  const submission = await Submission.findById(req.params.id);
+
+  if (!submission) {
+    return next(new ErrorResponse("Submission not found", 404));
+  }
+
+  // Check if user is parent
+  if (req.user.role !== "parent") {
+    return next(
+      new ErrorResponse("Not authorized to add parent feedback", 403)
+    );
+  }
+
+  submission.parentFeedback = {
+    feedback: req.body.feedback,
+    parent: req.user.id,
+    date: Date.now(),
+  };
+
+  await submission.save();
+
+  res.status(200).json({
+    success: true,
+    data: submission,
+  });
+});
+
+// @desc    Check submission for plagiarism
+// @route   POST /api/submissions/:id/check-plagiarism
+// @access  Private (Teacher, Admin)
+exports.checkSubmissionPlagiarism = asyncHandler(async (req, res, next) => {
+  const submission = await Submission.findById(req.params.id);
+
+  if (!submission) {
+    return next(new ErrorResponse("Submission not found", 404));
+  }
+
+  // Check if user is teacher or admin
+  if (!["teacher", "admin"].includes(req.user.role)) {
+    return next(new ErrorResponse("Not authorized to check plagiarism", 403));
+  }
+
+  const result = await checkPlagiarism(submission.content);
+
+  submission.plagiarismCheck = {
+    score: result.score,
+    report: result.report,
+    checkedBy: req.user.id,
+    checkedAt: Date.now(),
+  };
+
+  await submission.save();
+
+  res.status(200).json({
+    success: true,
+    data: submission,
+  });
+});
+
+// @desc    Get submission statistics
+// @route   GET /api/submissions/stats
+// @access  Private (Teacher, Admin)
+exports.getSubmissionStats = asyncHandler(async (req, res, next) => {
+  // Check if user is teacher or admin
+  if (!["teacher", "admin"].includes(req.user.role)) {
+    return next(new ErrorResponse("Not authorized to view statistics", 403));
+  }
+
+  const stats = await Submission.aggregate([
+    {
+      $group: {
+        _id: "$status",
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+
+  res.status(200).json({
+    success: true,
+    data: stats,
+  });
+});
 
 // @desc    Download submission file
 // @route   GET /api/submissions/:id/download/:fileId
 // @access  Private
-exports.downloadSubmissionFile = async (req, res, next) => {
-  try {
-    const submission = await Submission.findById(req.params.id);
+exports.downloadSubmissionFile = asyncHandler(async (req, res, next) => {
+  const submission = await Submission.findById(req.params.id);
 
-    if (!submission) {
-      return next(
-        new ErrorResponse(
-          `Submission not found with id of ${req.params.id}`,
-          404
-        )
-      );
-    }
-
-    // Check if user has access to this submission
-    const hasAccess = await checkSubmissionAccess(req.user, submission);
-    if (!hasAccess) {
-      return next(
-        new ErrorResponse("Not authorized to access this submission", 403)
-      );
-    }
-
-    // Find the file
-    const file = submission.attachments.id(req.params.fileId);
-    if (!file) {
-      return next(
-        new ErrorResponse(`File not found with id of ${req.params.fileId}`, 404)
-      );
-    }
-
-    const filePath = path.join(__dirname, "../", file.url);
-    const fileName = file.name || path.basename(filePath);
-
-    res.download(filePath, fileName);
-  } catch (err) {
-    next(err);
+  if (!submission) {
+    return next(new ErrorResponse("Submission not found", 404));
   }
-};
+
+  // Check access
+  await checkSubmissionAccess(submission, req.user);
+
+  const file = submission.files.find(
+    (f) => f._id.toString() === req.params.fileId
+  );
+
+  if (!file) {
+    return next(new ErrorResponse("File not found", 404));
+  }
+
+  res.download(file.path, file.originalname);
+});
 
 // Helper function to check submission access
-const checkSubmissionAccess = async (user, submission) => {
+const checkSubmissionAccess = async (submission, user) => {
   // Admins have access to everything
   if (user.role === "admin") return true;
 
@@ -408,13 +580,64 @@ const checkSubmissionAccess = async (user, submission) => {
   return false;
 };
 
-// Helper function to calculate grade
-const calculateGrade = (marks, totalMarks) => {
-  const percentage = (marks / totalMarks) * 100;
+// @desc    Get student's submissions
+// @route   GET /api/submissions/student
+// @access  Private/Student
+exports.getStudentSubmissions = async (req, res, next) => {
+  try {
+    // Check if user is student
+    if (req.user.role !== "student") {
+      return next(
+        new ErrorResponse("Only students can access this endpoint", 403)
+      );
+    }
 
-  if (percentage >= 80) return "A";
-  if (percentage >= 70) return "B";
-  if (percentage >= 60) return "C";
-  if (percentage >= 50) return "D";
-  return "F";
+    const submissions = await Submission.find({ student: req.user.id })
+      .populate("assignment", "title dueDate totalMarks")
+      .populate("enrollment", "academicYear term")
+      .sort("-submitDate");
+
+    res.status(200).json({
+      success: true,
+      count: submissions.length,
+      data: submissions,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Get teacher's submissions to grade
+// @route   GET /api/submissions/teacher
+// @access  Private/Teacher
+exports.getTeacherSubmissions = async (req, res, next) => {
+  try {
+    // Check if user is teacher
+    if (req.user.role !== "teacher") {
+      return next(
+        new ErrorResponse("Only teachers can access this endpoint", 403)
+      );
+    }
+
+    // Get assignments created by teacher
+    const assignments = await Assignment.find({
+      createdBy: req.user.id,
+    }).select("_id");
+
+    const submissions = await Submission.find({
+      assignment: { $in: assignments.map((a) => a._id) },
+    })
+      .populate("assignment", "title dueDate totalMarks")
+      .populate("student", "firstName lastName")
+      .populate("enrollment", "academicYear term")
+      .sort("-submitDate");
+
+    res.status(200).json({
+      success: true,
+      count: submissions.length,
+      data: submissions,
+    });
+  } catch (err) {
+    next(err);
+  }
 };

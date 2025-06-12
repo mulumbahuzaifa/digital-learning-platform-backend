@@ -36,10 +36,10 @@ exports.getGradebooks = asyncHandler(async (req, res, next) => {
   }
 
   const gradebooks = await Gradebook.find(query)
-    .populate('student', 'firstName lastName')
-    .populate('class', 'name code')
-    .populate('subject', 'name code')
-    .populate('teacher', 'firstName lastName')
+    .populate('student', '_id firstName lastName')
+    .populate('class', '_id name code')
+    .populate('subject', '_id name code')
+    .populate('teacher', '_id firstName lastName')
     .sort('academicYear term');
 
   res.status(200).json({
@@ -220,7 +220,7 @@ exports.deleteGradebook = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Not authorized to delete this gradebook entry', 403));
   }
 
-  await gradebook.remove();
+  await gradebook.deleteOne();
 
   res.status(200).json({
     success: true,
@@ -232,14 +232,14 @@ exports.deleteGradebook = asyncHandler(async (req, res, next) => {
 
 function hasGradebookAccess(user, gradebook) {
   if (user.role === 'admin') return true;
-  if (gradebook.student.toString() === user.id) return true;
-  if (gradebook.teacher.toString() === user.id) return true;
+  if (gradebook.student._id.toString() === user.id) return true;
+  if (gradebook.teacher._id.toString() === user.id) return true;
   return false;
 }
 
 function canModifyGradebook(user, gradebook) {
   if (user.role === 'admin') return true;
-  if (gradebook.teacher.toString() === user.id) return true;
+  if (gradebook.teacher._id.toString() === user.id) return true;
   return false;
 }
 

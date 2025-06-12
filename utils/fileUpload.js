@@ -1,64 +1,62 @@
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const ErrorResponse = require('./errorResponse');
+const ErrorResponse = require("./errorResponse");
 
-// Configure storage paths
-const uploadPaths = {
-  content: path.join(__dirname, '../public/uploads/content'),
-  submissions: path.join(__dirname, '../public/uploads/submissions'),
-  thumbnails: path.join(__dirname, '../public/uploads/thumbnails')
-};
-
-// Ensure upload directories exist
-const ensureUploadDirs = () => {
-  Object.values(uploadPaths).forEach(dir => {
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-  });
-};
-
-// Initialize storage engine
+// Configure storage
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    ensureUploadDirs();
-    let uploadPath = uploadPaths.content; // Default path
-    
-    if (file.fieldname === 'files') {
-      uploadPath = uploadPaths.submissions;
-    } else if (file.fieldname === 'thumbnail') {
-      uploadPath = uploadPaths.thumbnails;
+    // Determine upload directory based on type
+    const uploadType = req.path.includes("/submissions")
+      ? "submissions"
+      : "content";
+    const uploadDir = path.join(__dirname, `../public/uploads/${uploadType}`);
+
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
     }
-    
-    cb(null, uploadPath);
+
+    cb(null, uploadDir);
   },
   filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    // Create unique filename
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     const ext = path.extname(file.originalname);
-    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
-  }
+    cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
+  },
 });
 
-// File type validation
-function checkFileType(file, cb) {
-  const filetypes = /jpeg|jpg|png|gif|pdf|doc|docx|ppt|pptx|xls|xlsx|txt|mp4|mp3|zip/;
-  const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-  const mimetype = filetypes.test(file.mimetype);
+// File filter
+const fileFilter = (req, file, cb) => {
+  // Get allowed formats from request
+  const allowedFormats = req.body.allowedFormats || [
+    "pdf",
+    "doc",
+    "docx",
+    "txt",
+    "jpg",
+    "jpeg",
+    "png",
+  ];
 
-  if (mimetype && extname) {
-    return cb(null, true);
+  // Check file extension
+  const ext = path.extname(file.originalname).toLowerCase().substring(1);
+  if (allowedFormats.includes(ext)) {
+    cb(null, true);
+  } else {
+    cb(new ErrorResponse(`File type ${ext} not allowed`, 400), false);
   }
-  cb(new ErrorResponse('File type not supported', 400));
-}
+};
 
-// Initialize multer upload
+// Configure multer
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
-  fileFilter: function (req, file, cb) {
-    checkFileType(file, cb);
-  }
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 5, // Maximum 5 files
+  },
 });
 
 /**
@@ -68,16 +66,16 @@ const upload = multer({
  */
 const uploadFile = (file) => {
   if (!file) {
-    throw new ErrorResponse('No file uploaded', 400);
+    throw new ErrorResponse("No file uploaded", 400);
   }
 
   return {
-    url: `/uploads/content/${file.filename}`,
+    url: `/uploads/${file.path.split("uploads/")[1]}`,
     filename: file.filename,
     originalname: file.originalname,
     size: file.size,
     mimetype: file.mimetype,
-    path: file.path
+    path: file.path,
   };
 };
 
@@ -87,18 +85,29 @@ const uploadFile = (file) => {
  */
 const deleteFile = async (filePath) => {
   try {
-    const fullPath = path.join(__dirname, '../public', filePath);
+    const fullPath = path.join(__dirname, "../public", filePath);
     if (fs.existsSync(fullPath)) {
       await fs.promises.unlink(fullPath);
     }
-  } catch (err) {
-    console.error('Error deleting file:', err);
-    throw new ErrorResponse('Failed to delete file', 500);
+  } catch (error) {
+    console.error("Error deleting file:", error);
+    throw new ErrorResponse("Error deleting file", 500);
   }
 };
 
+// Helper function to get file info
+const getFileInfo = (file) => {
+  return {
+    url: `/uploads/${file.path.split("uploads/")[1]}`,
+    name: file.originalname,
+    type: file.mimetype,
+    size: file.size,
+  };
+};
+
 module.exports = {
-  upload,          // For middleware usage
-  uploadFile,      // For direct file handling
-  deleteFile       // For file removal
+  upload, // For middleware usage
+  uploadFile, // For direct file handling
+  deleteFile, // For file removal
+  getFileInfo, // For getting file information
 };

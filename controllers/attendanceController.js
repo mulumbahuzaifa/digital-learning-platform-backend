@@ -103,11 +103,11 @@ exports.getAttendanceRecord = async (req, res, next) => {
 
 // @desc    Create attendance record
 // @route   POST /api/attendance
-// @access  Private/Teacher
+// @access  Private/Teacher or Admin
 exports.createAttendance = async (req, res, next) => {
   try {
-    // Verify user is a teacher
-    if (req.user.role !== "teacher") {
+    // Verify user is a teacher or admin
+    if (req.user.role !== "admin" && req.user.role !== "teacher") {
       return next(
         new ErrorResponse("Only teachers can create attendance records", 403)
       );
@@ -133,7 +133,8 @@ exports.createAttendance = async (req, res, next) => {
         );
       }
 
-      // Check if teacher is assigned to this subject in this class
+      // Check if teacher is assigned to this subject in this class 
+
       const isAssigned = classObj.subjects.some(
         (s) =>
           s.subject.toString() === req.body.subject &&
@@ -143,7 +144,7 @@ exports.createAttendance = async (req, res, next) => {
           )
       );
 
-      if (!isAssigned) {
+      if (req.user.role === "teacher" && !isAssigned) {
         return next(
           new ErrorResponse(
             "You are not assigned to teach this subject in this class",
@@ -412,7 +413,7 @@ exports.deleteAttendance = async (req, res, next) => {
       );
     }
 
-    await attendance.remove();
+    await attendance.deleteOne();
 
     res.status(200).json({
       success: true,

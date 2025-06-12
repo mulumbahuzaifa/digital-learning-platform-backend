@@ -1,6 +1,7 @@
 const Class = require("../models/Class");
 const Subject = require("../models/Subject");
 const User = require("../models/User");
+const AcademicEnrollment = require("../models/AcademicEnrollment");
 const ErrorResponse = require("../utils/errorResponse");
 
 // @desc    Get all classes
@@ -8,20 +9,19 @@ const ErrorResponse = require("../utils/errorResponse");
 // @access  Private
 exports.getClasses = async (req, res, next) => {
   try {
-    const { year, term, subject } = req.query;
+    const { level, stream, subject } = req.query;
     let query = {};
 
-    if (year) query.year = year;
-    if (term) query.academicTerm = term;
+    if (level) query.level = level;
+    if (stream) query.stream = stream;
     if (subject) query["subjects.subject"] = subject;
 
     const classes = await Class.find(query)
       .populate("subjects.subject", "name code")
       .populate("subjects.teachers.teacher", "firstName lastName")
-      .populate("students.student", "firstName lastName")
       .populate({
         path: "classTeacher",
-        select: "firstName lastName email", // Only populate if field exists
+        select: "firstName lastName email",
       })
       .sort("name");
 
@@ -44,7 +44,6 @@ exports.getClass = async (req, res, next) => {
     const classObj = await Class.findById(req.params.id)
       .populate("subjects.subject")
       .populate("subjects.teachers.teacher", "firstName lastName")
-      .populate("students.student", "firstName lastName")
       .populate("classTeacher", "firstName lastName");
 
     if (!classObj) {
@@ -53,9 +52,23 @@ exports.getClass = async (req, res, next) => {
       );
     }
 
+    // Get current academic year and term enrollments
+    const currentEnrollments = await AcademicEnrollment.find({
+      class: req.params.id,
+      status: "active",
+    })
+    .populate("class", "name code level stream")
+      .populate("student", "firstName lastName email")
+      .populate("subjects.subject", "name code");
+
+    const response = {
+      ...classObj.toObject(),
+      currentEnrollments,
+    };
+
     res.status(200).json({
       success: true,
-      data: classObj,
+      data: response,
     });
   } catch (err) {
     next(err);
@@ -64,10 +77,10 @@ exports.getClass = async (req, res, next) => {
 
 // @desc    Create class
 // @route   POST /api/classes
-// @access  Private/Admin
+// @access  Private/Admin or Teacher
 exports.createClass = async (req, res, next) => {
   try {
-    const { name, year, academicTerm, description } = req.body;
+    const { name, level, stream, description } = req.body;
 
     // Initialize subjects as empty array if not provided
     const subjects = req.body.subjects || [];
@@ -84,26 +97,11 @@ exports.createClass = async (req, res, next) => {
       }
     }
 
-    // Generate unique class code
-    const subjectCode =
-      subjects.length > 0
-        ? subjects[0].subject.code.substring(0, 4).toUpperCase()
-        : "GEN";
-    const randomChars = Math.random()
-      .toString(36)
-      .substring(2, 6)
-      .toUpperCase();
-    const code = `${year}-${subjectCode}-${academicTerm.replace(
-      "Term ",
-      "T"
-    )}-${randomChars}`;
-
     // Create class with subjects
     const newClass = await Class.create({
       name,
-      code,
-      year,
-      academicTerm,
+      level,
+      stream,
       description,
       subjects: subjects.map((subject) => ({
         subject: subject.subject,
@@ -123,7 +121,7 @@ exports.createClass = async (req, res, next) => {
 
 // @desc    Update class
 // @route   PUT /api/classes/:id
-// @access  Private/Admin
+// @access  Private/Admin or Teacher
 exports.updateClass = async (req, res, next) => {
   try {
     let classObj = await Class.findById(req.params.id);
@@ -172,7 +170,7 @@ exports.deleteClass = async (req, res, next) => {
       );
     }
 
-    await classObj.remove();
+    await classObj.deleteOne();
 
     res.status(200).json({
       success: true,
@@ -185,7 +183,7 @@ exports.deleteClass = async (req, res, next) => {
 
 // @desc    Add subject to class
 // @route   POST /api/classes/:classId/subjects
-// @access  Private/Admin
+// @access  Private/Admin or Teacher
 exports.addSubjectToClass = async (req, res, next) => {
   try {
     const classObj = await Class.findById(req.params.id);
@@ -372,80 +370,211 @@ exports.removeTeacherFromSubject = async (req, res, next) => {
   }
 };
 
-// @desc    Add student to class
-// @route   POST /api/classes/:id/students
-// @access  Private/Admin
-exports.addStudentToClass = async (req, res, next) => {
+// @desc    Get my classes (for teachers and students)
+// @route   GET /api/classes/my-classes
+// @access  Private
+exports.getMyClasses = async (req, res, next) => {
   try {
-    const classObj = await Class.findById(req.params.id);
-    if (!classObj) {
-      return next(new ErrorResponse(`Class not found with id of ${req.params.id}`, 404));
+    let classes;
+
+    if (req.user.role === "teacher") {
+      // Teacher case - get classes where teacher is assigned to subjects
+      classes = await Class.find({
+        "subjects.teachers": {
+          $elemMatch: {
+            teacher: req.user._id,
+            status: "approved",
+          },
+        },
+      })
+        .populate({
+          path: "subjects.subject",
+          select:
+            "name code category isActive subCategory description syllabus",
+        })
+
+        .populate({
+          path: "subjects.teachers.teacher",
+          select: "firstName lastName",
+          match: { _id: req.user._id },
+        });
+
+      // Get current academic year enrollments for these classes
+      const enrollments = await AcademicEnrollment.find({
+        class: { $in: classes.map((c) => c._id) },
+        status: "active",
+      }) 
+        .populate("student", "firstName lastName email")
+        .populate("subjects.subject", "name code category isActive subCategory description syllabus");
+
+      // Transform data for cleaner response
+      const transformedClasses = classes.map((classObj) => {
+        // Get enrollments for this specific class
+        const classEnrollments = enrollments.filter(
+          (e) => e.class.toString() === classObj._id.toString()
+        );
+
+        return {
+          class: {
+            _id: classObj._id,
+            name: classObj.name,
+            code: classObj.code,
+            level: classObj.level,
+            stream: classObj.stream,
+          },
+          subjects: classObj.subjects
+            .filter((subject) =>
+              subject.teachers.some(
+                (t) => t.teacher && t.teacher._id.equals(req.user._id)
+              )
+            )
+            .map((subject) => ({
+              _id: subject.subject._id,
+              name: subject.subject.name,
+              code: subject.subject.code,
+              category: subject.subject.category,
+              subCategory: subject.subject.subCategory,
+              isActive: subject.subject.isActive,
+            })),
+          enrolledStudents: classEnrollments.map((enrollment) => ({
+            student: {
+              _id: enrollment.student._id,
+              firstName: enrollment.student.firstName,
+              lastName: enrollment.student.lastName,
+              email: enrollment.student.email,
+            },
+            enrollmentDetails: {
+              academicYear: enrollment.academicYear,
+              term: enrollment.term,
+              status: enrollment.status,
+              enrollmentDate: enrollment.enrollmentDate,
+              subjects: enrollment.subjects.map((s) => ({
+                subject: s.subject,
+                status: s.status,
+                enrollmentDate: s.enrollmentDate,
+                completionDate: s.completionDate,
+              })),
+            },
+          })),
+        };
+      });
+
+      return res.status(200).json({
+        success: true,
+        role: "teacher",
+        count: transformedClasses.length,
+        data: transformedClasses,
+      });
+    } else if (req.user.role === "student") {
+      // Student case - get current enrollments
+      const enrollments = await AcademicEnrollment.find({
+        student: req.user._id,
+        status: "active",
+      })
+        .populate({
+          path: "class",
+          select: "name code level stream isActive subjects",
+           populate: [{
+            // Populate subject details
+            path: "subjects.subject",
+            select: "name code category isActive subCategory description syllabus teachers"
+          }, {
+            // Populate teacher details
+            path: "subjects.teachers.teacher",
+            select: "firstName lastName email"
+          }]
+        })
+      .populate({
+        path: "subjects.subject",
+        select: "name code category isActive subCategory description syllabus teachers"
+      });
+
+      const transformedClasses = enrollments.map((enrollment) => {
+        // Get subjects with their teachers from the class
+        const activeSubjects = enrollment.subjects
+          .filter((s) => s.status === "enrolled")
+          .map((s) => {
+            // Find matching subject in class.subjects to get teachers
+            const classSubject = enrollment.class.subjects.find(
+              (cs) => cs.subject._id.toString() === s.subject._id.toString()
+            );
+            if (!classSubject) {
+              console.warn(
+                `Subject ${s.subject._id} not found in class ${enrollment.class._id}`
+              );
+              return null; // Skip if subject not found in class
+            }
+            // Ensure classSubject is defined before accessing teachers
+            if (!classSubject.teachers || !Array.isArray(classSubject.teachers)) {
+              console.warn(
+                `No teachers found for subject ${s.subject._id} in class ${enrollment.class._id}`
+              );
+              return null; // Skip if no teachers
+            }
+
+          // Map teachers if available
+            const teachers = classSubject?.teachers
+              ?.filter(t => t.teacher) // Filter out any null teacher references
+              .map(t => ({
+                teacher:{
+                  _id: t.teacher._id,
+                  firstName: t.teacher.firstName,
+                  lastName: t.teacher.lastName,
+                  email: t.teacher.email
+                },
+                isLeadTeacher: t.isLeadTeacher || false,
+                status: t.status || 'approved'
+              })) || [];
+              console.log("Teachers for Subject:", teachers);
+            return {
+              _id: s.subject._id,
+              name: s.subject.name,
+              code: s.subject.code,
+              category: s.subject.category,
+              subCategory: s.subject.subCategory,
+              isActive: s.subject.isActive,
+              description: s.subject.description,
+              syllabus: s.subject.syllabus,
+              enrollmentStatus: s.status,
+              teachers: teachers 
+            };
+          }) .filter(subject => subject !== null); // Remove any null entries
+          console.log("Active Subjects for Class:", activeSubjects);
+        return {
+          _id: enrollment.class._id,
+          name: enrollment.class.name,
+          code: enrollment.class.code,
+          level: enrollment.class.level,
+          stream: enrollment.class.stream,
+          isActive: enrollment.class.isActive,
+          enrollmentInfo: {
+            _id: enrollment._id,
+            academicYear: enrollment.academicYear,
+            term: enrollment.term,
+            enrollmentDate: enrollment.enrollmentDate,
+            status: enrollment.status,
+          },
+          subjects: activeSubjects,
+        };
+      });
+      console.log("Transformed Classes for Student:", transformedClasses);
+
+      return res.status(200).json({
+        success: true,
+        role: "student",
+        count: transformedClasses.length,
+        data: transformedClasses,
+      });
+    } else {
+      return next(
+        new ErrorResponse(
+          "This endpoint is only for teachers and students",
+          403
+        )
+      );
     }
-
-    // Check if student exists and is actually a student
-    const student = await User.findById(req.body.student);
-    if (!student || student.role !== 'student') {
-      return next(new ErrorResponse(`Student not found with id of ${req.body.student}`, 404));
-    }
-
-    // Check if student already in class
-    const studentExists = classObj.students.some(
-      s => s.student.toString() === req.body.student
-    );
-
-    if (studentExists) {
-      return next(new ErrorResponse('Student already exists in this class', 400));
-    }
-
-    classObj.students.push({
-      student: req.body.student,
-      status: req.body.status || 'approved',
-      enrollmentType: req.body.enrollmentType || 'new',
-      enrolledBy: req.user.id
-    });
-
-    await classObj.save();
-
-    res.status(200).json({
-      success: true,
-      data: classObj
-    });
   } catch (err) {
-    next(err);
-  }
-};
-
-// @desc    Remove student from class
-// @route   DELETE /api/classes/:id/students/:studentId
-// @access  Private/Admin
-exports.removeStudentFromClass = async (req, res, next) => {
-  try {
-    const classObj = await Class.findById(req.params.id);
-    if (!classObj) {
-      return next(new ErrorResponse(`Class not found with id of ${req.params.id}`, 404));
-    }
-
-    const studentIndex = classObj.students.findIndex(
-      s => s.student.toString() === req.params.studentId
-    );
-
-    if (studentIndex === -1) {
-      return next(new ErrorResponse('Student not found in this class', 404));
-    }
-
-    // Also remove from prefects if they are one
-    classObj.prefects = classObj.prefects.filter(
-      p => p.student.toString() !== req.params.studentId
-    );
-
-    classObj.students.splice(studentIndex, 1);
-    await classObj.save();
-
-    res.status(200).json({
-      success: true,
-      data: classObj
-    });
-  } catch (err) {
+    console.error("Error fetching classes:", err);
     next(err);
   }
 };
@@ -457,39 +586,49 @@ exports.assignPrefect = async (req, res, next) => {
   try {
     const classObj = await Class.findById(req.params.id);
     if (!classObj) {
-      return next(new ErrorResponse(`Class not found with id of ${req.params.id}`, 404));
+      return next(
+        new ErrorResponse(`Class not found with id of ${req.params.id}`, 404)
+      );
     }
 
     // Verify student exists in this class
     const studentInClass = classObj.students.some(
-      s => s.student.toString() === req.body.student && s.status === 'approved'
+      (s) =>
+        s.student.toString() === req.body.student && s.status === "approved"
     );
 
     if (!studentInClass) {
-      return next(new ErrorResponse('Student not found in this class or not approved', 404));
+      return next(
+        new ErrorResponse(
+          "Student not found in this class or not approved",
+          404
+        )
+      );
     }
 
     // Check if position already assigned
     const positionExists = classObj.prefects.some(
-      p => p.position === req.body.position
+      (p) => p.position === req.body.position
     );
 
     if (positionExists) {
-      return next(new ErrorResponse('This prefect position is already assigned', 400));
+      return next(
+        new ErrorResponse("This prefect position is already assigned", 400)
+      );
     }
 
     classObj.prefects.push({
       position: req.body.position,
       student: req.body.student,
       assignedAt: Date.now(),
-      assignedBy: req.user.id
+      assignedBy: req.user.id,
     });
 
     await classObj.save();
 
     res.status(200).json({
       success: true,
-      data: classObj
+      data: classObj,
     });
   } catch (err) {
     next(err);
@@ -503,15 +642,17 @@ exports.removePrefect = async (req, res, next) => {
   try {
     const classObj = await Class.findById(req.params.id);
     if (!classObj) {
-      return next(new ErrorResponse(`Class not found with id of ${req.params.id}`, 404));
+      return next(
+        new ErrorResponse(`Class not found with id of ${req.params.id}`, 404)
+      );
     }
 
     const prefectIndex = classObj.prefects.findIndex(
-      p => p._id.toString() === req.params.prefectId
+      (p) => p._id.toString() === req.params.prefectId
     );
 
     if (prefectIndex === -1) {
-      return next(new ErrorResponse('Prefect assignment not found', 404));
+      return next(new ErrorResponse("Prefect assignment not found", 404));
     }
 
     classObj.prefects.splice(prefectIndex, 1);
@@ -519,44 +660,7 @@ exports.removePrefect = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      data: classObj
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-
-// @desc    Get my classes (for teachers and students)
-// @route   GET /api/classes/my-classes
-// @access  Private
-exports.getMyClasses = async (req, res, next) => {
-  try {
-    let classes;
-
-    if (req.user.role === "teacher") {
-      classes = await Class.find({
-        "subjects.teachers.teacher": req.user.id,
-        "subjects.teachers.status": "approved",
-      })
-        .populate("subjects.subject")
-        .populate("students.student", "firstName lastName");
-    } else if (req.user.role === "student") {
-      classes = await Class.find({
-        "students.student": req.user.id,
-        "students.status": "approved",
-      })
-        .populate("subjects.subject")
-        .populate("subjects.teachers.teacher", "firstName lastName");
-    } else {
-      return next(
-        new ErrorResponse("Admins do not have assigned classes", 400)
-      );
-    }
-
-    res.status(200).json({
-      success: true,
-      count: classes.length,
-      data: classes,
+      data: classObj,
     });
   } catch (err) {
     next(err);
