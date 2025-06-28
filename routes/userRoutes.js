@@ -11,7 +11,7 @@ const {
   getTeachers,
 } = require("../controllers/userController");
 const { protect, authorize } = require("../middleware/auth");
-
+const { upload } = require('../middleware/upload');
 /**
  * @swagger
  * tags:
@@ -149,9 +149,31 @@ router.get('/teachers', getTeachers);
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
- *             $ref: '#/components/schemas/User'
+ *             type: object
+ *             properties:
+ *               firstName:
+ *                 type: string
+ *               lastName:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               password:
+ *                 type: string
+ *                 format: password
+ *               role:
+ *                 type: string
+ *                 enum: [admin, teacher, student]
+ *               documents:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *               newQualification:
+ *                 type: string
+ *                 description: JSON string of qualification data
  *     responses:
  *       201:
  *         description: Created
@@ -172,7 +194,7 @@ router.get('/teachers', getTeachers);
 
 router.route('/')
   .get(authorize('admin'), getUsers)
-  .post(authorize('admin'), createUser);
+  .post(authorize('admin'), upload.array('documents', 5), createUser);
 
 /**
  * @swagger
@@ -214,12 +236,31 @@ router.route('/')
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
- *             $ref: '#/components/schemas/User'
+ *             type: object
+ *             properties:
+ *               firstName:
+ *                 type: string
+ *               lastName:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               role:
+ *                 type: string
+ *                 enum: [admin, teacher, student]
+ *               documents:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *               newQualification:
+ *                 type: string
+ *                 description: JSON string of qualification data
  *     responses:
  *       200:
- *         description: Updated
+ *         description: Success
  *         content:
  *           application/json:
  *             schema:
@@ -247,7 +288,7 @@ router.route('/')
 
 router.route('/:id')
   .get(authorize('admin'), getUser)
-  .put(updateUser)
+  .put(upload.array('documents', 5), updateUser)
   .delete(authorize('admin'), deleteUser);
 
 /**
@@ -267,9 +308,35 @@ router.route('/:id')
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
- *             $ref: '#/components/schemas/UserProfile'
+ *             type: object
+ *             properties:
+ *               bio:
+ *                 type: string
+ *               dateOfBirth:
+ *                 type: string
+ *                 format: date
+ *               gender:
+ *                 type: string
+ *                 enum: [male, female, other]
+ *               phone:
+ *                 type: string
+ *               address:
+ *                 type: object
+ *               documents:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *               qualificationIndex:
+ *                 type: number
+ *                 description: Index of qualification to update
+ *               documentDescription:
+ *                 type: string
+ *               newQualification:
+ *                 type: string
+ *                 description: JSON string of qualification data
  *     responses:
  *       200:
  *         description: Updated
@@ -281,7 +348,7 @@ router.route('/:id')
  *         description: Not authorized
  */
 
-router.put('/profile/:id', updateProfile);
+router.put('/profile/:id', upload.array('documents', 5), updateProfile);
 
 
 module.exports = router;

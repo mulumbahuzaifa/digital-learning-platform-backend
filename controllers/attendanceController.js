@@ -120,7 +120,6 @@ exports.createAttendance = async (req, res, next) => {
         new ErrorResponse(`Class not found with id of ${req.body.class}`, 404)
       );
     }
-
     // Verify subject exists if provided
     if (req.body.subject) {
       const subject = await Subject.findById(req.body.subject);
@@ -182,23 +181,25 @@ exports.createAttendance = async (req, res, next) => {
         new ErrorResponse("One or more students not found or not valid", 404)
       );
     }
-
+    console.log(studentIds)
     // Check if students are enrolled in this class
-    const invalidStudents = studentIds.filter(
-      (studentId) =>
-        !classObj.students.some(
-          (s) => s.student.toString() === studentId && s.status === "approved"
-        )
-    );
+    // const invalidStudents = studentIds.filter(
+    //   (studentId) =>
 
-    if (invalidStudents.length > 0) {
-      return next(
-        new ErrorResponse(
-          `Students not enrolled in this class: ${invalidStudents.join(", ")}`,
-          400
-        )
-      );
-    }
+    //     !classObj.students.some(
+    //       (s) => s.student.toString() === studentId && s.status === "approved"
+    //     )
+    // );
+
+    // if (invalidStudents.length > 0) {
+    //   return next(
+    //     new ErrorResponse(
+    //       `Students not enrolled in this class: ${invalidStudents.join(", ")}`,
+    //       400
+    //     )
+    //   );
+    // }
+    console.log(req.body)
 
     const attendance = await Attendance.create({
       ...req.body,

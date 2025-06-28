@@ -4,6 +4,7 @@ const Subject = require('../models/Subject');
 const User = require('../models/User');
 const ErrorResponse = require('../utils/errorResponse');
 const asyncHandler = require('../middleware/async');
+const AcademicEnrollment = require('../models/AcademicEnrollment');
 
 // @desc    Get all gradebook entries
 // @route   GET /api/gradebook
@@ -75,10 +76,10 @@ exports.getGradebook = asyncHandler(async (req, res, next) => {
 
 // @desc    Create gradebook entry
 // @route   POST /api/gradebook
-// @access  Private/Teacher
+// @access  Private/Teacher or Admin
 exports.createGradebook = asyncHandler(async (req, res, next) => {
-  if (req.user.role !== 'teacher') {
-    return next(new ErrorResponse('Only teachers can create gradebook entries', 403));
+  if (req.user.role !== 'teacher' && req.user.role !== 'admin') {
+    return next(new ErrorResponse('Only teachers and admins can create gradebook entries', 403));
   }
 
   const { student, class: classId, subject, academicYear, term } = req.body;
@@ -94,7 +95,7 @@ exports.createGradebook = asyncHandler(async (req, res, next) => {
   if (!classObj) {
     return next(new ErrorResponse(`Class not found with id of ${classId}`, 404));
   }
-
+ console.log(req.body);
   // Validate subject
   const subjectObj = await Subject.findById(subject);
   if (!subjectObj) {
@@ -102,20 +103,23 @@ exports.createGradebook = asyncHandler(async (req, res, next) => {
   }
 
   // Check student enrollment
-  const isEnrolled = classObj.students.some(
-    s => s.student.toString() === student && s.status === 'approved'
-  );
+      const isEnrolled = await AcademicEnrollment.find({
+        student: student,
+        status: "active",
+      });
   if (!isEnrolled) {
     return next(new ErrorResponse('Student is not enrolled in this class', 400));
   }
 
-  // Check teacher assignment
-  const isAssigned = classObj.subjects.some(
-    s => s.subject.toString() === subject &&
-         s.teachers.some(t => t.teacher.toString() === req.user.id && t.status === 'approved')
-  );
-  if (!isAssigned) {
-    return next(new ErrorResponse('You are not assigned to teach this subject', 403));
+  // Check teacher assignment (skip for admin)
+  if (req.user.role === 'teacher') {
+    const isAssigned = classObj.subjects.some(
+      s => s.subject.toString() === subject &&
+           s.teachers.some(t => t.teacher.toString() === req.user.id && t.status === 'approved')
+    );
+    if (!isAssigned) {
+      return next(new ErrorResponse('You are not assigned to teach this subject', 403));
+    }
   }
 
   // Check for existing entry
@@ -133,7 +137,7 @@ exports.createGradebook = asyncHandler(async (req, res, next) => {
   // Create gradebook
   const gradebook = await Gradebook.create({
     ...req.body,
-    teacher: req.user.id
+    teacher: req.body.teacher || req.user.id // Allow admin to specify a teacher or use themselves
   });
 
   res.status(201).json({

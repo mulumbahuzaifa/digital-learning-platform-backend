@@ -92,6 +92,11 @@ const NotificationSchema = new mongoose.Schema({
     ],
     required: true
   },
+  type: {
+    type: String,
+    enum: ['info', 'success', 'warning', 'error'],
+    default: 'info'
+  },
   isRead: { type: Boolean, default: false },
   readAt: { type: Date },
   priority: {

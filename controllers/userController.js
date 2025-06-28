@@ -3,6 +3,7 @@ const Class = require("../models/Class");
 const ErrorResponse = require("../utils/errorResponse");
 const asyncHandler = require('../middleware/async');
 const sendEmail = require('../utils/emailService');
+const fileUpload = require('../utils/fileUpload');
 
 // @desc    Get all users
 // @route   GET /api/users
@@ -64,8 +65,38 @@ exports.createUser = asyncHandler(async (req, res, next) => {
     );
   }
 
+  const userData = { ...req.body };
+
+  // Handle qualification documents for teachers
+  if (userData.role === 'teacher' && req.files && req.files.length > 0 && req.body.newQualification) {
+    try {
+      const newQualification = JSON.parse(req.body.newQualification);
+      
+      // Process uploaded files
+      const documentFiles = req.files.map(file => ({
+        name: file.originalname,
+        url: `/uploads/qualifications/${file.filename}`,
+        fileType: file.mimetype,
+        uploadedAt: Date.now(),
+        description: req.body.documentDescription || 'Qualification document'
+      }));
+      
+      // Add documents to the qualification
+      newQualification.documents = documentFiles;
+      
+      // Initialize profile and qualifications if they don't exist
+      if (!userData.profile) userData.profile = {};
+      if (!userData.profile.qualifications) userData.profile.qualifications = [];
+      
+      // Add the qualification to the user data
+      userData.profile.qualifications.push(newQualification);
+    } catch (error) {
+      return next(new ErrorResponse(`Invalid qualification data: ${error.message}`, 400));
+    }
+  }
+
   // Create user
-  const user = await User.create(req.body);
+  const user = await User.create(userData);
 
   // Send verification email if not admin-created
   if (!req.user) {
@@ -121,8 +152,82 @@ exports.updateUser = asyncHandler(async (req, res, next) => {
     );
   }
 
-  // Update user
-  user = await User.findByIdAndUpdate(req.params.id, req.body, {
+  const userData = { ...req.body };
+
+  // Handle qualification documents for teachers
+  if (user.role === 'teacher' && req.files && req.files.length > 0) {
+    // Handle adding documents to existing qualification
+    if (req.body.qualificationIndex) {
+      const qualificationIndex = parseInt(req.body.qualificationIndex);
+      
+      // Ensure the qualification exists
+      if (!user.profile.qualifications[qualificationIndex]) {
+        return next(new ErrorResponse(`Qualification not found at index ${qualificationIndex}`, 404));
+      }
+      
+      // Process uploaded files
+      const documentFiles = req.files.map(file => ({
+        name: file.originalname,
+        url: `/uploads/qualifications/${file.filename}`,
+        fileType: file.mimetype,
+        uploadedAt: Date.now(),
+        description: req.body.documentDescription || 'Qualification document'
+      }));
+      
+      // Add documents to the specific qualification
+      if (!user.profile.qualifications[qualificationIndex].documents) {
+        user.profile.qualifications[qualificationIndex].documents = [];
+      }
+      
+      user.profile.qualifications[qualificationIndex].documents.push(...documentFiles);
+      
+      // Save user with updated qualifications
+      await user.save();
+      
+      return res.status(200).json({
+        success: true,
+        data: user
+      });
+    }
+    
+    // Handle adding a new qualification with documents
+    if (req.body.newQualification) {
+      try {
+        const newQualification = JSON.parse(req.body.newQualification);
+        
+        // Process uploaded files for the new qualification
+        const documentFiles = req.files.map(file => ({
+          name: file.originalname,
+          url: `/uploads/qualifications/${file.filename}`,
+          fileType: file.mimetype,
+          uploadedAt: Date.now(),
+          description: req.body.documentDescription || 'Qualification document'
+        }));
+        
+        // Add documents to the new qualification
+        newQualification.documents = documentFiles;
+        
+        // Add the new qualification to the user's profile
+        if (!user.profile) user.profile = {};
+        if (!user.profile.qualifications) user.profile.qualifications = [];
+        
+        user.profile.qualifications.push(newQualification);
+        
+        // Save user with updated qualifications
+        await user.save();
+        
+        return res.status(200).json({
+          success: true,
+          data: user
+        });
+      } catch (error) {
+        return next(new ErrorResponse(`Invalid qualification data: ${error.message}`, 400));
+      }
+    }
+  }
+
+  // Update user with standard fields
+  user = await User.findByIdAndUpdate(req.params.id, userData, {
     new: true,
     runValidators: true
   }).select('-password');
@@ -172,8 +277,77 @@ exports.updateProfile = asyncHandler(async (req, res, next) => {
     );
   }
 
-  // Update profile fields
-  user.profile = { ...user.profile, ...req.body };
+  // Handle file uploads if present
+  if (req.files && req.files.length > 0) {
+    try {
+      // Check if we have qualification data
+      if (!req.body.newQualification) {
+        return next(new ErrorResponse('Qualification data is required when uploading documents', 400));
+      }
+      
+      const newQualification = JSON.parse(req.body.newQualification);
+      
+      // Process uploaded files for the qualification
+      const documentFiles = req.files.map(file => ({
+        name: file.originalname,
+        url: `/uploads/qualifications/${file.filename}`,
+        fileType: file.mimetype,
+        uploadedAt: Date.now(),
+        description: req.body.documentDescription || 'Qualification document'
+      }));
+      
+      // Add documents to the qualification
+      newQualification.documents = documentFiles;
+      
+      // Add the qualification to the user's profile
+      if (!user.profile.qualifications) {
+        user.profile.qualifications = [];
+      }
+      
+      user.profile.qualifications.push(newQualification);
+    } catch (error) {
+      return next(new ErrorResponse(`Invalid qualification data: ${error.message}`, 400));
+    }
+  } else {
+    // Handle profile updates without file uploads
+    const profileData = req.body.profile || {};
+    
+    // Update only the provided profile fields
+    if (profileData.bio !== undefined) user.profile.bio = profileData.bio;
+    if (profileData.dateOfBirth !== undefined) user.profile.dateOfBirth = profileData.dateOfBirth;
+    if (profileData.gender !== undefined) user.profile.gender = profileData.gender;
+    if (profileData.phone !== undefined) user.profile.phone = profileData.phone;
+    
+    // Handle address updates
+    if (profileData.address) {
+      user.profile.address = user.profile.address || {};
+      if (profileData.address.district !== undefined) user.profile.address.district = profileData.address.district;
+      if (profileData.address.county !== undefined) user.profile.address.county = profileData.address.county;
+      if (profileData.address.subCounty !== undefined) user.profile.address.subCounty = profileData.address.subCounty;
+    }
+    
+    // Handle student-specific fields
+    if (user.role === 'student') {
+      if (profileData.currentClass !== undefined) user.profile.currentClass = profileData.currentClass;
+      if (profileData.year !== undefined) user.profile.year = profileData.year;
+      if (profileData.studentId !== undefined) user.profile.studentId = profileData.studentId;
+      
+      // Handle parentGuardian updates
+      if (profileData.parentGuardian) {
+        user.profile.parentGuardian = user.profile.parentGuardian || {};
+        if (profileData.parentGuardian.name !== undefined) user.profile.parentGuardian.name = profileData.parentGuardian.name;
+        if (profileData.parentGuardian.contact !== undefined) user.profile.parentGuardian.contact = profileData.parentGuardian.contact;
+        if (profileData.parentGuardian.relationship !== undefined) user.profile.parentGuardian.relationship = profileData.parentGuardian.relationship;
+      }
+    }
+    
+    // Handle teacher-specific fields
+    if (user.role === 'teacher') {
+      if (profileData.teacherId !== undefined) user.profile.teacherId = profileData.teacherId;
+      if (profileData.department !== undefined) user.profile.department = profileData.department;
+    }
+  }
+  
   await user.save();
 
   res.status(200).json({

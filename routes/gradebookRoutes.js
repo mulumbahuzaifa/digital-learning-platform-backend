@@ -188,7 +188,7 @@ const { protect, authorize } = require('../middleware/auth');
  *   
  *   post:
  *     summary: Create gradebook entry
- *     description: Create a new gradebook entry (Teachers only)
+ *     description: Create a new gradebook entry (Teachers and Admins only)
  *     tags: [Gradebook]
  *     security:
  *       - bearerAuth: []
@@ -306,7 +306,7 @@ router.use(protect);
 
 router.route('/')
   .get(getGradebooks)
-  .post(authorize('teacher'), createGradebook);
+  .post(authorize('teacher', 'admin'), createGradebook);
 
 router.route('/:id')
   .get(getGradebook)

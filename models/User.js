@@ -205,6 +205,18 @@ const UserSchema = new mongoose.Schema({
         yearsOfExperience: { type: Number },
         institution: { type: String },
         yearObtained: { type: Number },
+        documents: [
+          {
+            name: { type: String, required: true },
+            url: { type: String, required: true },
+            fileType: { type: String },
+            uploadedAt: { type: Date, default: Date.now },
+            description: { type: String },
+          }
+        ],
+        isVerified: { type: Boolean, default: false },
+        verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        verifiedAt: { type: Date },
       },
     ],
     teacherId: { type: String, unique: true, sparse: true },

@@ -100,6 +100,7 @@ const AttendanceSchema = new mongoose.Schema({
   subject: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Subject",
+    required: false,
   },
   recordedBy: {
     type: mongoose.Schema.Types.ObjectId,

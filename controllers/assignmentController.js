@@ -112,13 +112,13 @@ exports.getAssignment = async (req, res, next) => {
 
 // @desc    Create assignment
 // @route   POST /api/assignments
-// @access  Private/Teacher
+// @access  Private (Teacher, Admin)
 exports.createAssignment = async (req, res, next) => {
   try {
-    // Check if user is teacher
-    if (req.user.role !== "teacher") {
+    // Check if user is teacher or admin
+    if (req.user.role !== "teacher" && req.user.role !== "admin") {
       return next(
-        new ErrorResponse("Only teachers can create assignments", 403)
+        new ErrorResponse("Only teachers and admins can create assignments", 403)
       );
     }
 
@@ -138,20 +138,23 @@ exports.createAssignment = async (req, res, next) => {
       return next(new ErrorResponse("Subject not found in this class", 404));
     }
 
-    // Verify teacher is assigned to this subject
-    const teacherAssigned = classObj.subjects
-      .find((s) => s.subject.toString() === req.body.subject)
-      ?.teachers.some(
-        (t) => t.teacher.toString() === req.user.id && t.status === "approved"
-      );
+    // Skip teacher verification for admins
+    if (req.user.role === "teacher") {
+      // Verify teacher is assigned to this subject
+      const teacherAssigned = classObj.subjects
+        .find((s) => s.subject.toString() === req.body.subject)
+        ?.teachers.some(
+          (t) => t.teacher.toString() === req.user.id && t.status === "approved"
+        );
 
-    if (!teacherAssigned) {
-      return next(
-        new ErrorResponse(
-          "You are not authorized to create assignments for this subject",
-          403
-        )
-      );
+      if (!teacherAssigned) {
+        return next(
+          new ErrorResponse(
+            "You are not authorized to create assignments for this subject",
+            403
+          )
+        );
+      }
     }
 
     // Validate assignment type
@@ -183,13 +186,13 @@ exports.createAssignment = async (req, res, next) => {
 
 // @desc    Update assignment
 // @route   PUT /api/assignments/:id
-// @access  Private/Teacher
+// @access  Private/Teacher/Admin
 exports.updateAssignment = async (req, res, next) => {
   try {
-    // Check if user is teacher
-    if (req.user.role !== "teacher") {
+    // Check if user is teacher or admin
+    if (req.user.role !== "teacher" && req.user.role !== "admin") {
       return next(
-        new ErrorResponse("Only teachers can update assignments", 403)
+        new ErrorResponse("Only teachers and admins can update assignments", 403)
       );
     }
 
@@ -204,8 +207,8 @@ exports.updateAssignment = async (req, res, next) => {
       );
     }
 
-    // Verify teacher is the creator
-    if (assignment.createdBy.toString() !== req.user.id) {
+    // For teachers, verify they are the creator
+    if (req.user.role === "teacher" && assignment.createdBy.toString() !== req.user.id) {
       return next(
         new ErrorResponse(
           "You are not authorized to update this assignment",
@@ -214,8 +217,8 @@ exports.updateAssignment = async (req, res, next) => {
       );
     }
 
-    // If changing class or subject, verify teacher is assigned
-    if (req.body.class || req.body.subject) {
+    // For teachers, if changing class or subject, verify they are assigned
+    if (req.user.role === "teacher" && (req.body.class || req.body.subject)) {
       const classObj = await Class.findById(req.body.class || assignment.class);
       const subjectId = req.body.subject || assignment.subject;
 
@@ -248,8 +251,8 @@ exports.updateAssignment = async (req, res, next) => {
       return next(new ErrorResponse("Due date must be in the future", 400));
     }
 
-    // Prevent updating certain fields if assignment is published
-    if (assignment.status === "published") {
+    // Prevent updating certain fields if assignment is published (except for admins)
+    if (assignment.status === "published" && req.user.role !== "admin") {
       const restrictedFields = [
         "class",
         "subject",
@@ -284,13 +287,13 @@ exports.updateAssignment = async (req, res, next) => {
 
 // @desc    Delete assignment
 // @route   DELETE /api/assignments/:id
-// @access  Private/Teacher
+// @access  Private/Teacher/Admin
 exports.deleteAssignment = async (req, res, next) => {
   try {
-    // Check if user is teacher
-    if (req.user.role !== "teacher") {
+    // Check if user is teacher or admin
+    if (req.user.role !== "teacher" && req.user.role !== "admin") {
       return next(
-        new ErrorResponse("Only teachers can delete assignments", 403)
+        new ErrorResponse("Only teachers and admins can delete assignments", 403)
       );
     }
 
@@ -305,8 +308,8 @@ exports.deleteAssignment = async (req, res, next) => {
       );
     }
 
-    // Verify teacher is the creator
-    if (assignment.createdBy.toString() !== req.user.id) {
+    // For teachers, verify they are the creator
+    if (req.user.role === "teacher" && assignment.createdBy.toString() !== req.user.id) {
       return next(
         new ErrorResponse(
           "You are not authorized to delete this assignment",
@@ -315,8 +318,8 @@ exports.deleteAssignment = async (req, res, next) => {
       );
     }
 
-    // Prevent deleting published assignments
-    if (assignment.status === "published") {
+    // Prevent teachers from deleting published assignments (admins can delete any)
+    if (assignment.status === "published" && req.user.role !== "admin") {
       return next(new ErrorResponse("Cannot delete published assignment", 400));
     }
 

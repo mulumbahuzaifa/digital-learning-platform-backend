@@ -334,7 +334,7 @@ router.get('/my-content', getMyContent);
 
 router.route('/:id')
   .get(getSingleContent)
-  .put(authorize('teacher', 'admin'), updateContent)
+  .put(authorize('teacher', 'admin'), fileUpload.upload.single('file'), updateContent)
   .delete(authorize('teacher', 'admin'), deleteContent);
 
 router.get('/:id/download', downloadContent);

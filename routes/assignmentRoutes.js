@@ -98,7 +98,7 @@ const { protect, role } = require("../middleware/auth");
  *
  *   post:
  *     summary: Create new assignment
- *     description: Create a new assignment (Teachers only)
+ *     description: Create a new assignment (Teachers and Admins only)
  *     tags: [Assignments]
  *     security:
  *       - bearerAuth: []
@@ -319,7 +319,7 @@ router.use(protect);
 router
   .route("/")
   .get(getAssignments) // All roles can view (filtered in controller)
-  .post(role("teacher"), createAssignment); // Only teachers can create
+  .post(role("teacher", "admin"), createAssignment); // Teachers and admins can create
 
 router.get("/student", getStudentAssignments);
 router.get("/teacher", getTeacherAssignments);
