@@ -101,6 +101,7 @@ exports.createClass = async (req, res, next) => {
     const newClass = await Class.create({
       name,
       level,
+      code: `CL-${this.level}-${this.stream}`, // Auto-generated code
       stream,
       description,
       subjects: subjects.map((subject) => ({

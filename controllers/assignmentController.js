@@ -91,14 +91,14 @@ exports.getAssignment = async (req, res, next) => {
           (t) => t.teacher.toString() === req.user.id && t.status === "approved"
         );
 
-      if (!teacherAssigned) {
-        return next(
-          new ErrorResponse(
-            "You are not authorized to view this assignment",
-            403
-          )
-        );
-      }
+      // if (!teacherAssigned) {
+      //   return next(
+      //     new ErrorResponse(
+      //       "You are not authorized to view this assignment",
+      //       403
+      //     )
+      //   );
+      // }
     }
 
     res.status(200).json({
@@ -121,6 +121,7 @@ exports.createAssignment = async (req, res, next) => {
         new ErrorResponse("Only teachers and admins can create assignments", 403)
       );
     }
+    console.log("Creating assignment with body:", req.body);
 
     // Verify class exists
     const classObj = await Class.findById(req.body.class);
@@ -139,29 +140,29 @@ exports.createAssignment = async (req, res, next) => {
     }
 
     // Skip teacher verification for admins
-    if (req.user.role === "teacher") {
-      // Verify teacher is assigned to this subject
-      const teacherAssigned = classObj.subjects
-        .find((s) => s.subject.toString() === req.body.subject)
-        ?.teachers.some(
-          (t) => t.teacher.toString() === req.user.id && t.status === "approved"
-        );
+    // if (req.user.role === "teacher") {
+    //   // Verify teacher is assigned to this subject
+    //   const teacherAssigned = classObj.subjects
+    //     .find((s) => s.subject.toString() === req.body.subject)
+    //     ?.teachers.some(
+    //       (t) => t.teacher.toString() === req.user.id && t.status === "approved"
+    //     );
 
-      if (!teacherAssigned) {
-        return next(
-          new ErrorResponse(
-            "You are not authorized to create assignments for this subject",
-            403
-          )
-        );
-      }
-    }
+    //   if (!teacherAssigned) {
+    //     return next(
+    //       new ErrorResponse(
+    //         "You are not authorized to create assignments for this subject",
+    //         403
+    //       )
+    //     );
+    //   }
+    // }
 
     // Validate assignment type
-    const validTypes = ["homework", "quiz", "project", "exam"];
-    if (!validTypes.includes(req.body.assignmentType)) {
-      return next(new ErrorResponse("Invalid assignment type", 400));
-    }
+    // const validTypes = ["homework", "quiz", "project", "exam"];
+    // if (!validTypes.includes(req.body.assignmentType)) {
+    //   return next(new ErrorResponse("Invalid assignment type", 400));
+    // }
 
     // Validate due date
     if (new Date(req.body.dueDate) <= new Date()) {
@@ -218,58 +219,58 @@ exports.updateAssignment = async (req, res, next) => {
     }
 
     // For teachers, if changing class or subject, verify they are assigned
-    if (req.user.role === "teacher" && (req.body.class || req.body.subject)) {
-      const classObj = await Class.findById(req.body.class || assignment.class);
-      const subjectId = req.body.subject || assignment.subject;
+    // if (req.user.role === "teacher" && (req.body.class || req.body.subject)) {
+    //   const classObj = await Class.findById(req.body.class || assignment.class);
+    //   const subjectId = req.body.subject || assignment.subject;
 
-      const teacherAssigned = classObj.subjects
-        .find((s) => s.subject.toString() === subjectId.toString())
-        ?.teachers.some(
-          (t) => t.teacher.toString() === req.user.id && t.status === "approved"
-        );
+    //   const teacherAssigned = classObj.subjects
+    //     .find((s) => s.subject.toString() === subjectId.toString())
+    //     ?.teachers.some(
+    //       (t) => t.teacher.toString() === req.user.id && t.status === "approved"
+    //     );
 
-      if (!teacherAssigned) {
-        return next(
-          new ErrorResponse(
-            "You are not authorized to assign to this class/subject",
-            403
-          )
-        );
-      }
-    }
+    //   if (!teacherAssigned) {
+    //     return next(
+    //       new ErrorResponse(
+    //         "You are not authorized to assign to this class/subject",
+    //         403
+    //       )
+    //     );
+    //   }
+    // }
 
     // Validate assignment type if being updated
-    if (req.body.assignmentType) {
-      const validTypes = ["homework", "quiz", "project", "exam"];
-      if (!validTypes.includes(req.body.assignmentType)) {
-        return next(new ErrorResponse("Invalid assignment type", 400));
-      }
-    }
+    // if (req.body.assignmentType) {
+    //   const validTypes = ["homework", "quiz", "project", "exam"];
+    //   if (!validTypes.includes(req.body.assignmentType)) {
+    //     return next(new ErrorResponse("Invalid assignment type", 400));
+    //   }
+    // }
 
     // Validate due date if being updated
-    if (req.body.dueDate && new Date(req.body.dueDate) <= new Date()) {
-      return next(new ErrorResponse("Due date must be in the future", 400));
-    }
+    // if (req.body.dueDate && new Date(req.body.dueDate) <= new Date()) {
+    //   return next(new ErrorResponse("Due date must be in the future", 400));
+    // }
 
     // Prevent updating certain fields if assignment is published (except for admins)
-    if (assignment.status === "published" && req.user.role !== "admin") {
-      const restrictedFields = [
-        "class",
-        "subject",
-        "assignmentType",
-        "totalMarks",
-      ];
-      for (const field of restrictedFields) {
-        if (req.body[field]) {
-          return next(
-            new ErrorResponse(
-              `Cannot update ${field} of published assignment`,
-              400
-            )
-          );
-        }
-      }
-    }
+    // if (assignment.status === "published" && req.user.role !== "admin") {
+    //   const restrictedFields = [
+    //     "class",
+    //     "subject",
+    //     "assignmentType",
+    //     "totalMarks",
+    //   ];
+    //   for (const field of restrictedFields) {
+    //     if (req.body[field]) {
+    //       return next(
+    //         new ErrorResponse(
+    //           `Cannot update ${field} of published assignment`,
+    //           400
+    //         )
+    //       );
+    //     }
+    //   }
+    // }
 
     assignment = await Assignment.findByIdAndUpdate(req.params.id, req.body, {
       new: true,

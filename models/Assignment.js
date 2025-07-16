@@ -238,7 +238,6 @@ const AssignmentSchema = new mongoose.Schema({
   assignmentType: {
     type: String,
     enum: ["homework", "classwork", "test", "exam", "project"],
-    required: true,
   },
   difficultyLevel: {
     type: String,

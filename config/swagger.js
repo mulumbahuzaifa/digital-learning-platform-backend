@@ -11,14 +11,14 @@ const options = {
     },
     servers: [
       {
-        url: 'http://localhost:5000',
+        url: process.env.BASE_URL || 'http://localhost:5000',
         description: 'Development server',
       },
     ],
     components: {
       securitySchemes: {
         bearerAuth: {
-          type: 'http',
+          type: 'https',
           scheme: 'bearer',
           bearerFormat: 'JWT',
         },
