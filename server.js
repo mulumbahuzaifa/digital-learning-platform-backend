@@ -27,7 +27,7 @@ const server = http.createServer(app);
 // Socket.IO setup
 const io = require("socket.io")(server, {
   cors: {
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    origin: process.env.CLIENT_URL || "https://digital-learning-platform-frontend.vercel.app",
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     credentials: true,
   },
@@ -58,7 +58,7 @@ app.set("io", io);
 // Middleware
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    origin: process.env.CLIENT_URL || "https://digital-learning-platform-frontend.vercel.app",
     credentials: true,
   })
 );
